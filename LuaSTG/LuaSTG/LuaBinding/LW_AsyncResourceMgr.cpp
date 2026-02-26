@@ -658,14 +658,16 @@ namespace luastg::binding
         // table_index: 资源列表表的索引
         // defaults_index: 默认参数表的索引（0 表示没有）
         // default_type: 默认资源类型
-        static std::vector<ResourceLoadRequest> ParseLoadRequests(lua_State* L, int table_index, int defaults_index, ResourceType default_type)
+        // 返回：请求列表和默认资源池
+        static std::pair<std::vector<ResourceLoadRequest>, ResourcePool*> ParseLoadRequests(lua_State* L, int table_index, int defaults_index, ResourceType default_type)
         {
             std::vector<ResourceLoadRequest> requests;
+            ResourcePool* default_pool = nullptr;
             
             if (!lua_istable(L, table_index))
             {
                 luaL_error(L, "Expected table of load requests");
-                return requests;
+                return {requests, default_pool};
             }
             
             ResourceLoadRequest default_request;
@@ -674,6 +676,7 @@ namespace luastg::binding
             if (defaults_index != 0 && lua_istable(L, defaults_index))
             {
                 ReadRequestParams(L, defaults_index, default_request);
+                default_pool = default_request.target_pool;
             }
             
             size_t count = lua_objlen(L, table_index);
@@ -696,30 +699,7 @@ namespace luastg::binding
                 lua_pop(L, 1);
             }
             
-            return requests;
-        }
-        
-        static ResourcePool* GetPoolFromLua(lua_State* L, int index)
-        {
-            if (lua_gettop(L) < index || lua_isnil(L, index))
-            {
-                return nullptr;
-            }
-            
-            if (lua_isstring(L, index))
-            {
-                const char* pool_name = lua_tostring(L, index);
-                if (strcmp(pool_name, "global") == 0)
-                {
-                    return LRES.GetResourcePool(ResourcePoolType::Global);
-                }
-                else if (strcmp(pool_name, "stage") == 0)
-                {
-                    return LRES.GetResourcePool(ResourcePoolType::Stage);
-                }
-            }
-            
-            return nullptr;
+            return {requests, default_pool};
         }
         
         static int LoadTextureAsync(lua_State* L) noexcept
@@ -727,7 +707,7 @@ namespace luastg::binding
             try
             {
                 int defaults_index = (lua_gettop(L) >= 2 && lua_istable(L, 2)) ? 2 : 0;
-                auto requests = ParseLoadRequests(L, 1, defaults_index, ResourceType::Texture);
+                auto [requests, default_pool] = ParseLoadRequests(L, 1, defaults_index, ResourceType::Texture);
                 
                 if (requests.empty())
                 {
@@ -740,8 +720,7 @@ namespace luastg::binding
                     return luaL_error(L, "AsyncResourceLoader not initialized");
                 }
                 
-                auto* target_pool = GetPoolFromLua(L, 3);
-                auto task = loader->SubmitTask(std::move(requests), true, target_pool);
+                auto task = loader->SubmitTask(std::move(requests), true, default_pool);
                 if (!task)
                 {
                     return luaL_error(L, "Failed to submit loading task");
@@ -761,7 +740,7 @@ namespace luastg::binding
             try
             {
                 int defaults_index = (lua_gettop(L) >= 2 && lua_istable(L, 2)) ? 2 : 0;
-                auto requests = ParseLoadRequests(L, 1, defaults_index, ResourceType::Sprite);
+                auto [requests, default_pool] = ParseLoadRequests(L, 1, defaults_index, ResourceType::Sprite);
                 
                 if (requests.empty())
                 {
@@ -774,8 +753,7 @@ namespace luastg::binding
                     return luaL_error(L, "AsyncResourceLoader not initialized");
                 }
                 
-                auto* target_pool = GetPoolFromLua(L, 3);
-                auto task = loader->SubmitTask(std::move(requests), true, target_pool);
+                auto task = loader->SubmitTask(std::move(requests), true, default_pool);
                 if (!task)
                 {
                     return luaL_error(L, "Failed to submit loading task");
@@ -795,7 +773,7 @@ namespace luastg::binding
             try
             {
                 int defaults_index = (lua_gettop(L) >= 2 && lua_istable(L, 2)) ? 2 : 0;
-                auto requests = ParseLoadRequests(L, 1, defaults_index, ResourceType::Animation);
+                auto [requests, default_pool] = ParseLoadRequests(L, 1, defaults_index, ResourceType::Animation);
                 
                 if (requests.empty())
                 {
@@ -808,8 +786,7 @@ namespace luastg::binding
                     return luaL_error(L, "AsyncResourceLoader not initialized");
                 }
                 
-                auto* target_pool = GetPoolFromLua(L, 3);
-                auto task = loader->SubmitTask(std::move(requests), true, target_pool);
+                auto task = loader->SubmitTask(std::move(requests), true, default_pool);
                 if (!task)
                 {
                     return luaL_error(L, "Failed to submit loading task");
@@ -829,7 +806,7 @@ namespace luastg::binding
             try
             {
                 int defaults_index = (lua_gettop(L) >= 2 && lua_istable(L, 2)) ? 2 : 0;
-                auto requests = ParseLoadRequests(L, 1, defaults_index, ResourceType::Music);
+                auto [requests, default_pool] = ParseLoadRequests(L, 1, defaults_index, ResourceType::Music);
                 
                 if (requests.empty())
                 {
@@ -842,8 +819,7 @@ namespace luastg::binding
                     return luaL_error(L, "AsyncResourceLoader not initialized");
                 }
                 
-                auto* target_pool = GetPoolFromLua(L, 3);
-                auto task = loader->SubmitTask(std::move(requests), true, target_pool);
+                auto task = loader->SubmitTask(std::move(requests), true, default_pool);
                 if (!task)
                 {
                     return luaL_error(L, "Failed to submit loading task");
@@ -863,7 +839,7 @@ namespace luastg::binding
             try
             {
                 int defaults_index = (lua_gettop(L) >= 2 && lua_istable(L, 2)) ? 2 : 0;
-                auto requests = ParseLoadRequests(L, 1, defaults_index, ResourceType::SoundEffect);
+                auto [requests, default_pool] = ParseLoadRequests(L, 1, defaults_index, ResourceType::SoundEffect);
                 
                 if (requests.empty())
                 {
@@ -876,8 +852,7 @@ namespace luastg::binding
                     return luaL_error(L, "AsyncResourceLoader not initialized");
                 }
                 
-                auto* target_pool = GetPoolFromLua(L, 3);
-                auto task = loader->SubmitTask(std::move(requests), true, target_pool);
+                auto task = loader->SubmitTask(std::move(requests), true, default_pool);
                 if (!task)
                 {
                     return luaL_error(L, "Failed to submit loading task");
@@ -897,7 +872,7 @@ namespace luastg::binding
             try
             {
                 int defaults_index = (lua_gettop(L) >= 2 && lua_istable(L, 2)) ? 2 : 0;
-                auto requests = ParseLoadRequests(L, 1, defaults_index, ResourceType::TrueTypeFont);
+                auto [requests, default_pool] = ParseLoadRequests(L, 1, defaults_index, ResourceType::TrueTypeFont);
                 
                 if (requests.empty())
                 {
@@ -910,8 +885,7 @@ namespace luastg::binding
                     return luaL_error(L, "AsyncResourceLoader not initialized");
                 }
                 
-                auto* target_pool = GetPoolFromLua(L, 3);
-                auto task = loader->SubmitTask(std::move(requests), true, target_pool);
+                auto task = loader->SubmitTask(std::move(requests), true, default_pool);
                 if (!task)
                 {
                     return luaL_error(L, "Failed to submit loading task");
@@ -931,7 +905,7 @@ namespace luastg::binding
             try
             {
                 int defaults_index = (lua_gettop(L) >= 2 && lua_istable(L, 2)) ? 2 : 0;
-                auto requests = ParseLoadRequests(L, 1, defaults_index, ResourceType::SpriteFont);
+                auto [requests, default_pool] = ParseLoadRequests(L, 1, defaults_index, ResourceType::SpriteFont);
                 
                 if (requests.empty())
                 {
@@ -944,8 +918,7 @@ namespace luastg::binding
                     return luaL_error(L, "AsyncResourceLoader not initialized");
                 }
                 
-                auto* target_pool = GetPoolFromLua(L, 3);
-                auto task = loader->SubmitTask(std::move(requests), true, target_pool);
+                auto task = loader->SubmitTask(std::move(requests), true, default_pool);
                 if (!task)
                 {
                     return luaL_error(L, "Failed to submit loading task");
@@ -965,7 +938,7 @@ namespace luastg::binding
             try
             {
                 int defaults_index = (lua_gettop(L) >= 2 && lua_istable(L, 2)) ? 2 : 0;
-                auto requests = ParseLoadRequests(L, 1, defaults_index, ResourceType::FX);
+                auto [requests, default_pool] = ParseLoadRequests(L, 1, defaults_index, ResourceType::FX);
                 
                 if (requests.empty())
                 {
@@ -978,8 +951,7 @@ namespace luastg::binding
                     return luaL_error(L, "AsyncResourceLoader not initialized");
                 }
                 
-                auto* target_pool = GetPoolFromLua(L, 3);
-                auto task = loader->SubmitTask(std::move(requests), true, target_pool);
+                auto task = loader->SubmitTask(std::move(requests), true, default_pool);
                 if (!task)
                 {
                     return luaL_error(L, "Failed to submit loading task");
@@ -999,7 +971,7 @@ namespace luastg::binding
             try
             {
                 int defaults_index = (lua_gettop(L) >= 2 && lua_istable(L, 2)) ? 2 : 0;
-                auto requests = ParseLoadRequests(L, 1, defaults_index, ResourceType::Model);
+                auto [requests, default_pool] = ParseLoadRequests(L, 1, defaults_index, ResourceType::Model);
                 
                 if (requests.empty())
                 {
@@ -1012,8 +984,7 @@ namespace luastg::binding
                     return luaL_error(L, "AsyncResourceLoader not initialized");
                 }
                 
-                auto* target_pool = GetPoolFromLua(L, 3);
-                auto task = loader->SubmitTask(std::move(requests), true, target_pool);
+                auto task = loader->SubmitTask(std::move(requests), true, default_pool);
                 if (!task)
                 {
                     return luaL_error(L, "Failed to submit loading task");
@@ -1033,7 +1004,7 @@ namespace luastg::binding
             try
             {
                 int defaults_index = (lua_gettop(L) >= 2 && lua_istable(L, 2)) ? 2 : 0;
-                auto requests = ParseLoadRequests(L, 1, defaults_index, ResourceType::Particle);
+                auto [requests, default_pool] = ParseLoadRequests(L, 1, defaults_index, ResourceType::Particle);
                 
                 if (requests.empty())
                 {
@@ -1046,8 +1017,7 @@ namespace luastg::binding
                     return luaL_error(L, "AsyncResourceLoader not initialized");
                 }
                 
-                auto* target_pool = GetPoolFromLua(L, 3);
-                auto task = loader->SubmitTask(std::move(requests), true, target_pool);
+                auto task = loader->SubmitTask(std::move(requests), true, default_pool);
                 if (!task)
                 {
                     return luaL_error(L, "Failed to submit loading task");
