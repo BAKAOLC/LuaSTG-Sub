@@ -63,7 +63,8 @@ namespace luastg::binding
         // 读取通用精灵参数（Sprite、Animation、Particle 共享）
         inline void ReadCommonSpriteParams(lua_State* L, int table_index,
                                           double& x, double& y, double& w, double& h,
-                                          double& anchor_x, double& anchor_y, bool& is_rect)
+                                          std::optional<double>& anchor_x, std::optional<double>& anchor_y, 
+                                          double& a, double& b, bool& is_rect)
         {
             if (auto val = ReadNumberField(L, table_index, "x")) x = *val;
             if (auto val = ReadNumberField(L, table_index, "y")) y = *val;
@@ -71,6 +72,8 @@ namespace luastg::binding
             if (auto val = ReadNumberField(L, table_index, "h")) h = *val;
             if (auto val = ReadNumberField(L, table_index, "anchor_x")) anchor_x = *val;
             if (auto val = ReadNumberField(L, table_index, "anchor_y")) anchor_y = *val;
+            if (auto val = ReadNumberField(L, table_index, "a")) a = *val;
+            if (auto val = ReadNumberField(L, table_index, "b")) b = *val;
             if (auto val = ReadBoolField(L, table_index, "rect")) is_rect = *val;
         }
     }
@@ -352,7 +355,7 @@ namespace luastg::binding
                 
                 if (auto texture = ReadStringField(L, table_index, "texture")) params.texture_name = *texture;
                 ReadCommonSpriteParams(L, table_index, params.x, params.y, params.w, params.h,
-                                      params.anchor_x, params.anchor_y, params.is_rect);
+                                      params.anchor_x, params.anchor_y, params.a, params.b, params.is_rect);
                 
                 request.params = params;
                 break;
@@ -368,7 +371,7 @@ namespace luastg::binding
                 
                 if (auto texture = ReadStringField(L, table_index, "texture")) params.texture_name = *texture;
                 ReadCommonSpriteParams(L, table_index, params.x, params.y, params.w, params.h,
-                                      params.anchor_x, params.anchor_y, params.is_rect);
+                                      params.anchor_x, params.anchor_y, params.a, params.b, params.is_rect);
                 if (auto n = ReadIntField(L, table_index, "n")) params.n = *n;
                 if (auto m = ReadIntField(L, table_index, "m")) params.m = *m;
                 if (auto interval = ReadIntField(L, table_index, "interval")) params.interval = *interval;
@@ -494,8 +497,8 @@ namespace luastg::binding
                 
                 if (auto path = ReadStringField(L, table_index, "path")) params.path = *path;
                 if (auto img_name = ReadStringField(L, table_index, "img_name")) params.particle_img_name = *img_name;
-                if (auto anchor_x = ReadNumberField(L, table_index, "anchor_x")) params.anchor_x = *anchor_x;
-                if (auto anchor_y = ReadNumberField(L, table_index, "anchor_y")) params.anchor_y = *anchor_y;
+                if (auto a = ReadNumberField(L, table_index, "a")) params.a = *a;
+                if (auto b = ReadNumberField(L, table_index, "b")) params.b = *b;
                 if (auto rect = ReadBoolField(L, table_index, "rect")) params.is_rect = *rect;
                 
                 request.params = params;
