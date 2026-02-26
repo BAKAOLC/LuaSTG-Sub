@@ -5,6 +5,76 @@
 
 namespace luastg::binding
 {
+    // 内联辅助函数：读取 Lua 表字段
+    namespace detail
+    {
+        inline std::optional<std::string> ReadStringField(lua_State* L, int table_index, const char* field_name)
+        {
+            lua_getfield(L, table_index, field_name);
+            std::optional<std::string> result;
+            if (lua_isstring(L, -1))
+            {
+                result = lua_tostring(L, -1);
+            }
+            lua_pop(L, 1);
+            return result;
+        }
+        
+        inline std::optional<double> ReadNumberField(lua_State* L, int table_index, const char* field_name)
+        {
+            lua_getfield(L, table_index, field_name);
+            std::optional<double> result;
+            if (lua_isnumber(L, -1))
+            {
+                result = lua_tonumber(L, -1);
+            }
+            lua_pop(L, 1);
+            return result;
+        }
+        
+        inline std::optional<int> ReadIntField(lua_State* L, int table_index, const char* field_name)
+        {
+            lua_getfield(L, table_index, field_name);
+            std::optional<int> result;
+            if (lua_isnumber(L, -1))
+            {
+                result = static_cast<int>(lua_tonumber(L, -1));
+            }
+            lua_pop(L, 1);
+            return result;
+        }
+        
+        inline std::optional<bool> ReadBoolField(lua_State* L, int table_index, const char* field_name)
+        {
+            lua_getfield(L, table_index, field_name);
+            std::optional<bool> result;
+            if (lua_isboolean(L, -1))
+            {
+                result = lua_toboolean(L, -1) != 0;
+            }
+            else if (lua_isnumber(L, -1))
+            {
+                result = lua_tonumber(L, -1) != 0;
+            }
+            lua_pop(L, 1);
+            return result;
+        }
+        
+        // 读取通用精灵参数（Sprite、Animation、Particle 共享）
+        inline void ReadCommonSpriteParams(lua_State* L, int table_index,
+                                          double& x, double& y, double& w, double& h,
+                                          double& anchor_x, double& anchor_y, bool& is_rect)
+        {
+            if (auto val = ReadNumberField(L, table_index, "x")) x = *val;
+            if (auto val = ReadNumberField(L, table_index, "y")) y = *val;
+            if (auto val = ReadNumberField(L, table_index, "w")) w = *val;
+            if (auto val = ReadNumberField(L, table_index, "h")) h = *val;
+            if (auto val = ReadNumberField(L, table_index, "anchor_x")) anchor_x = *val;
+            if (auto val = ReadNumberField(L, table_index, "anchor_y")) anchor_y = *val;
+            if (auto val = ReadBoolField(L, table_index, "rect")) is_rect = *val;
+        }
+    }
+    
     // LoadingTask Lua 包装
     struct LuaLoadingTask
     {
@@ -12,14 +82,17 @@ namespace luastg::binding
         
         std::shared_ptr<ResourceLoadingTask> task;
         
+        // 内联辅助宏：检查任务有效性
+        #define CHECK_TASK_VALID() \
+            if (!self->task) { \
+                return luaL_error(L, "Invalid loading task"); \
+            }
+        
         static int api_getId(lua_State* L)
         {
             lua::stack_t S(L);
             auto* self = cast(L, 1);
-            if (!self->task)
-            {
-                return luaL_error(L, "Invalid loading task");
-            }
+            CHECK_TASK_VALID()
             S.push_value(static_cast<lua_Integer>(self->task->GetId()));
             return 1;
         }
@@ -28,11 +101,7 @@ namespace luastg::binding
         {
             lua::stack_t S(L);
             auto* self = cast(L, 1);
-            if (!self->task)
-            {
-                return luaL_error(L, "Invalid loading task");
-            }
-            
+            CHECK_TASK_VALID()
             S.push_value(static_cast<lua_Integer>(self->task->GetCompletedCount()));
             S.push_value(static_cast<lua_Integer>(self->task->GetTotalCount()));
             return 2;
@@ -42,11 +111,7 @@ namespace luastg::binding
         {
             lua::stack_t S(L);
             auto* self = cast(L, 1);
-            if (!self->task)
-            {
-                return luaL_error(L, "Invalid loading task");
-            }
-            
+            CHECK_TASK_VALID()
             S.push_value(self->task->IsCompleted());
             return 1;
         }
@@ -55,11 +120,7 @@ namespace luastg::binding
         {
             lua::stack_t S(L);
             auto* self = cast(L, 1);
-            if (!self->task)
-            {
-                return luaL_error(L, "Invalid loading task");
-            }
-            
+            CHECK_TASK_VALID()
             S.push_value(self->task->IsCancelled());
             return 1;
         }
@@ -68,11 +129,7 @@ namespace luastg::binding
         {
             lua::stack_t S(L);
             auto* self = cast(L, 1);
-            if (!self->task)
-            {
-                return luaL_error(L, "Invalid loading task");
-            }
-            
+            CHECK_TASK_VALID()
             auto status = self->task->GetStatus();
             std::string_view status_str = "unknown";
             
@@ -102,11 +159,7 @@ namespace luastg::binding
         static int api_cancel(lua_State* L)
         {
             auto* self = cast(L, 1);
-            if (!self->task)
-            {
-                return luaL_error(L, "Invalid loading task");
-            }
-            
+            CHECK_TASK_VALID()
             self->task->Cancel();
             return 0;
         }
@@ -114,17 +167,12 @@ namespace luastg::binding
         static int api_wait(lua_State* L)
         {
             auto* self = cast(L, 1);
-            if (!self->task)
-            {
-                return luaL_error(L, "Invalid loading task");
-            }
-            
+            CHECK_TASK_VALID()
             // 简单的轮询等待
             while (!self->task->IsCompleted() && !self->task->IsCancelled())
             {
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
-            
             return 0;
         }
         
@@ -132,10 +180,7 @@ namespace luastg::binding
         {
             lua::stack_t S(L);
             auto* self = cast(L, 1);
-            if (!self->task)
-            {
-                return luaL_error(L, "Invalid loading task");
-            }
+            CHECK_TASK_VALID()
             
             auto results = self->task->GetResults();
             
@@ -249,6 +294,8 @@ namespace luastg::binding
             S.set_map_value(metatable, "__tostring", &api___tostring);
             S.set_map_value(metatable, "__index", method_table);
         }
+        
+        #undef CHECK_TASK_VALID
     };
     
     // 异步资源管理器 Lua API
@@ -257,27 +304,24 @@ namespace luastg::binding
         // 从 Lua 表中读取参数到 request
         static void ReadRequestParams(lua_State* L, int table_index, ResourceLoadRequest& request)
         {
-            lua_getfield(L, table_index, "name");
-            if (lua_isstring(L, -1))
-            {
-                request.name = lua_tostring(L, -1);
-            }
-            lua_pop(L, 1);
+            using namespace detail;
             
-            lua_getfield(L, table_index, "pool");
-            if (lua_isstring(L, -1))
+            if (auto name = ReadStringField(L, table_index, "name"))
             {
-                const char* pool_name = lua_tostring(L, -1);
-                if (strcmp(pool_name, "global") == 0)
+                request.name = *name;
+            }
+            
+            if (auto pool = ReadStringField(L, table_index, "pool"))
+            {
+                if (pool->compare("global") == 0)
                 {
                     request.target_pool = LRES.GetResourcePool(ResourcePoolType::Global);
                 }
-                else if (strcmp(pool_name, "stage") == 0)
+                else if (pool->compare("stage") == 0)
                 {
                     request.target_pool = LRES.GetResourcePool(ResourcePoolType::Stage);
                 }
             }
-            lua_pop(L, 1);
             
             switch (request.type)
             {
@@ -289,37 +333,10 @@ namespace luastg::binding
                     params = std::get<TextureLoadParams>(request.params);
                 }
                 
-                lua_getfield(L, table_index, "path");
-                if (lua_isstring(L, -1))
-                {
-                    params.path = lua_tostring(L, -1);
-                }
-                lua_pop(L, 1);
-                
-                lua_getfield(L, table_index, "mipmaps");
-                if (lua_isboolean(L, -1))
-                {
-                    params.mipmaps = lua_toboolean(L, -1) != 0;
-                }
-                else if (lua_isnumber(L, -1))
-                {
-                    params.mipmaps = lua_tonumber(L, -1) != 0;
-                }
-                lua_pop(L, 1);
-                
-                lua_getfield(L, table_index, "width");
-                if (lua_isnumber(L, -1))
-                {
-                    params.width = static_cast<int>(lua_tonumber(L, -1));
-                }
-                lua_pop(L, 1);
-                
-                lua_getfield(L, table_index, "height");
-                if (lua_isnumber(L, -1))
-                {
-                    params.height = static_cast<int>(lua_tonumber(L, -1));
-                }
-                lua_pop(L, 1);
+                if (auto path = ReadStringField(L, table_index, "path")) params.path = *path;
+                if (auto mipmaps = ReadBoolField(L, table_index, "mipmaps")) params.mipmaps = *mipmaps;
+                if (auto width = ReadIntField(L, table_index, "width")) params.width = *width;
+                if (auto height = ReadIntField(L, table_index, "height")) params.height = *height;
                 
                 request.params = params;
                 break;
@@ -333,43 +350,9 @@ namespace luastg::binding
                     params = std::get<SpriteLoadParams>(request.params);
                 }
                 
-                lua_getfield(L, table_index, "texture");
-                if (lua_isstring(L, -1))
-                {
-                    params.texture_name = lua_tostring(L, -1);
-                }
-                lua_pop(L, 1);
-                
-                lua_getfield(L, table_index, "x");
-                if (lua_isnumber(L, -1)) params.x = lua_tonumber(L, -1);
-                lua_pop(L, 1);
-                
-                lua_getfield(L, table_index, "y");
-                if (lua_isnumber(L, -1)) params.y = lua_tonumber(L, -1);
-                lua_pop(L, 1);
-                
-                lua_getfield(L, table_index, "w");
-                if (lua_isnumber(L, -1)) params.w = lua_tonumber(L, -1);
-                lua_pop(L, 1);
-                
-                lua_getfield(L, table_index, "h");
-                if (lua_isnumber(L, -1)) params.h = lua_tonumber(L, -1);
-                lua_pop(L, 1);
-                
-                lua_getfield(L, table_index, "anchor_x");
-                if (lua_isnumber(L, -1)) params.anchor_x = lua_tonumber(L, -1);
-                lua_pop(L, 1);
-                
-                lua_getfield(L, table_index, "anchor_y");
-                if (lua_isnumber(L, -1)) params.anchor_y = lua_tonumber(L, -1);
-                lua_pop(L, 1);
-                
-                lua_getfield(L, table_index, "rect");
-                if (lua_isboolean(L, -1))
-                {
-                    params.is_rect = lua_toboolean(L, -1) != 0;
-                }
-                lua_pop(L, 1);
+                if (auto texture = ReadStringField(L, table_index, "texture")) params.texture_name = *texture;
+                ReadCommonSpriteParams(L, table_index, params.x, params.y, params.w, params.h,
+                                      params.anchor_x, params.anchor_y, params.is_rect);
                 
                 request.params = params;
                 break;
@@ -383,55 +366,12 @@ namespace luastg::binding
                     params = std::get<AnimationLoadParams>(request.params);
                 }
                 
-                lua_getfield(L, table_index, "texture");
-                if (lua_isstring(L, -1))
-                {
-                    params.texture_name = lua_tostring(L, -1);
-                }
-                lua_pop(L, 1);
-                
-                lua_getfield(L, table_index, "x");
-                if (lua_isnumber(L, -1)) params.x = lua_tonumber(L, -1);
-                lua_pop(L, 1);
-                
-                lua_getfield(L, table_index, "y");
-                if (lua_isnumber(L, -1)) params.y = lua_tonumber(L, -1);
-                lua_pop(L, 1);
-                
-                lua_getfield(L, table_index, "w");
-                if (lua_isnumber(L, -1)) params.w = lua_tonumber(L, -1);
-                lua_pop(L, 1);
-                
-                lua_getfield(L, table_index, "h");
-                if (lua_isnumber(L, -1)) params.h = lua_tonumber(L, -1);
-                lua_pop(L, 1);
-                
-                lua_getfield(L, table_index, "n");
-                if (lua_isnumber(L, -1)) params.n = static_cast<int>(lua_tonumber(L, -1));
-                lua_pop(L, 1);
-                
-                lua_getfield(L, table_index, "m");
-                if (lua_isnumber(L, -1)) params.m = static_cast<int>(lua_tonumber(L, -1));
-                lua_pop(L, 1);
-                
-                lua_getfield(L, table_index, "interval");
-                if (lua_isnumber(L, -1)) params.interval = static_cast<int>(lua_tonumber(L, -1));
-                lua_pop(L, 1);
-                
-                lua_getfield(L, table_index, "anchor_x");
-                if (lua_isnumber(L, -1)) params.anchor_x = lua_tonumber(L, -1);
-                lua_pop(L, 1);
-                
-                lua_getfield(L, table_index, "anchor_y");
-                if (lua_isnumber(L, -1)) params.anchor_y = lua_tonumber(L, -1);
-                lua_pop(L, 1);
-                
-                lua_getfield(L, table_index, "rect");
-                if (lua_isboolean(L, -1))
-                {
-                    params.is_rect = lua_toboolean(L, -1) != 0;
-                }
-                lua_pop(L, 1);
+                if (auto texture = ReadStringField(L, table_index, "texture")) params.texture_name = *texture;
+                ReadCommonSpriteParams(L, table_index, params.x, params.y, params.w, params.h,
+                                      params.anchor_x, params.anchor_y, params.is_rect);
+                if (auto n = ReadIntField(L, table_index, "n")) params.n = *n;
+                if (auto m = ReadIntField(L, table_index, "m")) params.m = *m;
+                if (auto interval = ReadIntField(L, table_index, "interval")) params.interval = *interval;
                 
                 lua_getfield(L, table_index, "sprites");
                 if (lua_istable(L, -1))
@@ -461,27 +401,10 @@ namespace luastg::binding
                     params = std::get<MusicLoadParams>(request.params);
                 }
                 
-                lua_getfield(L, table_index, "path");
-                if (lua_isstring(L, -1))
-                {
-                    params.path = lua_tostring(L, -1);
-                }
-                lua_pop(L, 1);
-                
-                lua_getfield(L, table_index, "loop_start");
-                if (lua_isnumber(L, -1)) params.loop_start = lua_tonumber(L, -1);
-                lua_pop(L, 1);
-                
-                lua_getfield(L, table_index, "loop_end");
-                if (lua_isnumber(L, -1)) params.loop_end = lua_tonumber(L, -1);
-                lua_pop(L, 1);
-                
-                lua_getfield(L, table_index, "once_decode");
-                if (lua_isboolean(L, -1))
-                {
-                    params.once_decode = lua_toboolean(L, -1) != 0;
-                }
-                lua_pop(L, 1);
+                if (auto path = ReadStringField(L, table_index, "path")) params.path = *path;
+                if (auto loop_start = ReadNumberField(L, table_index, "loop_start")) params.loop_start = *loop_start;
+                if (auto loop_end = ReadNumberField(L, table_index, "loop_end")) params.loop_end = *loop_end;
+                if (auto once_decode = ReadBoolField(L, table_index, "once_decode")) params.once_decode = *once_decode;
                 
                 request.params = params;
                 break;
@@ -495,12 +418,7 @@ namespace luastg::binding
                     params = std::get<SoundEffectLoadParams>(request.params);
                 }
                 
-                lua_getfield(L, table_index, "path");
-                if (lua_isstring(L, -1))
-                {
-                    params.path = lua_tostring(L, -1);
-                }
-                lua_pop(L, 1);
+                if (auto path = ReadStringField(L, table_index, "path")) params.path = *path;
                 
                 request.params = params;
                 break;
@@ -514,30 +432,9 @@ namespace luastg::binding
                     params = std::get<SpriteFontLoadParams>(request.params);
                 }
                 
-                lua_getfield(L, table_index, "path");
-                if (lua_isstring(L, -1))
-                {
-                    params.path = lua_tostring(L, -1);
-                }
-                lua_pop(L, 1);
-                
-                lua_getfield(L, table_index, "tex_path");
-                if (lua_isstring(L, -1))
-                {
-                    params.font_tex_path = lua_tostring(L, -1);
-                }
-                lua_pop(L, 1);
-                
-                lua_getfield(L, table_index, "mipmaps");
-                if (lua_isboolean(L, -1))
-                {
-                    params.mipmaps = lua_toboolean(L, -1) != 0;
-                }
-                else if (lua_isnumber(L, -1))
-                {
-                    params.mipmaps = lua_tonumber(L, -1) != 0;
-                }
-                lua_pop(L, 1);
+                if (auto path = ReadStringField(L, table_index, "path")) params.path = *path;
+                if (auto tex_path = ReadStringField(L, table_index, "tex_path")) params.font_tex_path = *tex_path;
+                if (auto mipmaps = ReadBoolField(L, table_index, "mipmaps")) params.mipmaps = *mipmaps;
                 
                 request.params = params;
                 break;
@@ -551,20 +448,9 @@ namespace luastg::binding
                     params = std::get<TrueTypeFontLoadParams>(request.params);
                 }
                 
-                lua_getfield(L, table_index, "path");
-                if (lua_isstring(L, -1))
-                {
-                    params.path = lua_tostring(L, -1);
-                }
-                lua_pop(L, 1);
-                
-                lua_getfield(L, table_index, "width");
-                if (lua_isnumber(L, -1)) params.font_width = static_cast<float>(lua_tonumber(L, -1));
-                lua_pop(L, 1);
-                
-                lua_getfield(L, table_index, "height");
-                if (lua_isnumber(L, -1)) params.font_height = static_cast<float>(lua_tonumber(L, -1));
-                lua_pop(L, 1);
+                if (auto path = ReadStringField(L, table_index, "path")) params.path = *path;
+                if (auto width = ReadNumberField(L, table_index, "width")) params.font_width = static_cast<float>(*width);
+                if (auto height = ReadNumberField(L, table_index, "height")) params.font_height = static_cast<float>(*height);
                 
                 request.params = params;
                 break;
@@ -578,12 +464,7 @@ namespace luastg::binding
                     params = std::get<FXLoadParams>(request.params);
                 }
                 
-                lua_getfield(L, table_index, "path");
-                if (lua_isstring(L, -1))
-                {
-                    params.path = lua_tostring(L, -1);
-                }
-                lua_pop(L, 1);
+                if (auto path = ReadStringField(L, table_index, "path")) params.path = *path;
                 
                 request.params = params;
                 break;
@@ -597,12 +478,7 @@ namespace luastg::binding
                     params = std::get<ModelLoadParams>(request.params);
                 }
                 
-                lua_getfield(L, table_index, "path");
-                if (lua_isstring(L, -1))
-                {
-                    params.path = lua_tostring(L, -1);
-                }
-                lua_pop(L, 1);
+                if (auto path = ReadStringField(L, table_index, "path")) params.path = *path;
                 
                 request.params = params;
                 break;
@@ -616,34 +492,11 @@ namespace luastg::binding
                     params = std::get<ParticleLoadParams>(request.params);
                 }
                 
-                lua_getfield(L, table_index, "path");
-                if (lua_isstring(L, -1))
-                {
-                    params.path = lua_tostring(L, -1);
-                }
-                lua_pop(L, 1);
-                
-                lua_getfield(L, table_index, "img_name");
-                if (lua_isstring(L, -1))
-                {
-                    params.particle_img_name = lua_tostring(L, -1);
-                }
-                lua_pop(L, 1);
-                
-                lua_getfield(L, table_index, "anchor_x");
-                if (lua_isnumber(L, -1)) params.anchor_x = lua_tonumber(L, -1);
-                lua_pop(L, 1);
-                
-                lua_getfield(L, table_index, "anchor_y");
-                if (lua_isnumber(L, -1)) params.anchor_y = lua_tonumber(L, -1);
-                lua_pop(L, 1);
-                
-                lua_getfield(L, table_index, "rect");
-                if (lua_isboolean(L, -1))
-                {
-                    params.is_rect = lua_toboolean(L, -1) != 0;
-                }
-                lua_pop(L, 1);
+                if (auto path = ReadStringField(L, table_index, "path")) params.path = *path;
+                if (auto img_name = ReadStringField(L, table_index, "img_name")) params.particle_img_name = *img_name;
+                if (auto anchor_x = ReadNumberField(L, table_index, "anchor_x")) params.anchor_x = *anchor_x;
+                if (auto anchor_y = ReadNumberField(L, table_index, "anchor_y")) params.anchor_y = *anchor_y;
+                if (auto rect = ReadBoolField(L, table_index, "rect")) params.is_rect = *rect;
                 
                 request.params = params;
                 break;
@@ -702,12 +555,14 @@ namespace luastg::binding
             return {requests, default_pool};
         }
         
-        static int LoadTextureAsync(lua_State* L) noexcept
+        // 通用的异步加载函数模板
+        template<ResourceType Type>
+        static inline int LoadResourceAsync(lua_State* L) noexcept
         {
             try
             {
                 int defaults_index = (lua_gettop(L) >= 2 && lua_istable(L, 2)) ? 2 : 0;
-                auto [requests, default_pool] = ParseLoadRequests(L, 1, defaults_index, ResourceType::Texture);
+                auto [requests, default_pool] = ParseLoadRequests(L, 1, defaults_index, Type);
                 
                 if (requests.empty())
                 {
@@ -731,305 +586,98 @@ namespace luastg::binding
             }
             catch (const std::exception& e)
             {
-                return luaL_error(L, "LoadTextureAsync failed: %s", e.what());
+                return luaL_error(L, "LoadResourceAsync failed: %s", e.what());
             }
+        }
+        
+        static int LoadTextureAsync(lua_State* L) noexcept
+        {
+            return LoadResourceAsync<ResourceType::Texture>(L);
         }
         
         static int LoadSpriteAsync(lua_State* L) noexcept
         {
-            try
-            {
-                int defaults_index = (lua_gettop(L) >= 2 && lua_istable(L, 2)) ? 2 : 0;
-                auto [requests, default_pool] = ParseLoadRequests(L, 1, defaults_index, ResourceType::Sprite);
-                
-                if (requests.empty())
-                {
-                    return luaL_error(L, "No valid load requests");
-                }
-                
-                auto* loader = LAPP.GetAsyncResourceLoader();
-                if (!loader)
-                {
-                    return luaL_error(L, "AsyncResourceLoader not initialized");
-                }
-                
-                auto task = loader->SubmitTask(std::move(requests), true, default_pool);
-                if (!task)
-                {
-                    return luaL_error(L, "Failed to submit loading task");
-                }
-                
-                LuaLoadingTask::create(L, task);
-                return 1;
-            }
-            catch (const std::exception& e)
-            {
-                return luaL_error(L, "LoadSpriteAsync failed: %s", e.what());
-            }
+            return LoadResourceAsync<ResourceType::Sprite>(L);
         }
         
         static int LoadAnimationAsync(lua_State* L) noexcept
         {
-            try
-            {
-                int defaults_index = (lua_gettop(L) >= 2 && lua_istable(L, 2)) ? 2 : 0;
-                auto [requests, default_pool] = ParseLoadRequests(L, 1, defaults_index, ResourceType::Animation);
-                
-                if (requests.empty())
-                {
-                    return luaL_error(L, "No valid load requests");
-                }
-                
-                auto* loader = LAPP.GetAsyncResourceLoader();
-                if (!loader)
-                {
-                    return luaL_error(L, "AsyncResourceLoader not initialized");
-                }
-                
-                auto task = loader->SubmitTask(std::move(requests), true, default_pool);
-                if (!task)
-                {
-                    return luaL_error(L, "Failed to submit loading task");
-                }
-                
-                LuaLoadingTask::create(L, task);
-                return 1;
-            }
-            catch (const std::exception& e)
-            {
-                return luaL_error(L, "LoadAnimationAsync failed: %s", e.what());
-            }
+            return LoadResourceAsync<ResourceType::Animation>(L);
         }
         
         static int LoadMusicAsync(lua_State* L) noexcept
         {
-            try
-            {
-                int defaults_index = (lua_gettop(L) >= 2 && lua_istable(L, 2)) ? 2 : 0;
-                auto [requests, default_pool] = ParseLoadRequests(L, 1, defaults_index, ResourceType::Music);
-                
-                if (requests.empty())
-                {
-                    return luaL_error(L, "No valid load requests");
-                }
-                
-                auto* loader = LAPP.GetAsyncResourceLoader();
-                if (!loader)
-                {
-                    return luaL_error(L, "AsyncResourceLoader not initialized");
-                }
-                
-                auto task = loader->SubmitTask(std::move(requests), true, default_pool);
-                if (!task)
-                {
-                    return luaL_error(L, "Failed to submit loading task");
-                }
-                
-                LuaLoadingTask::create(L, task);
-                return 1;
-            }
-            catch (const std::exception& e)
-            {
-                return luaL_error(L, "LoadMusicAsync failed: %s", e.what());
-            }
+            return LoadResourceAsync<ResourceType::Music>(L);
         }
         
         static int LoadSoundAsync(lua_State* L) noexcept
         {
-            try
-            {
-                int defaults_index = (lua_gettop(L) >= 2 && lua_istable(L, 2)) ? 2 : 0;
-                auto [requests, default_pool] = ParseLoadRequests(L, 1, defaults_index, ResourceType::SoundEffect);
-                
-                if (requests.empty())
-                {
-                    return luaL_error(L, "No valid load requests");
-                }
-                
-                auto* loader = LAPP.GetAsyncResourceLoader();
-                if (!loader)
-                {
-                    return luaL_error(L, "AsyncResourceLoader not initialized");
-                }
-                
-                auto task = loader->SubmitTask(std::move(requests), true, default_pool);
-                if (!task)
-                {
-                    return luaL_error(L, "Failed to submit loading task");
-                }
-                
-                LuaLoadingTask::create(L, task);
-                return 1;
-            }
-            catch (const std::exception& e)
-            {
-                return luaL_error(L, "LoadSoundAsync failed: %s", e.what());
-            }
+            return LoadResourceAsync<ResourceType::SoundEffect>(L);
         }
         
         static int LoadFontAsync(lua_State* L) noexcept
         {
-            try
-            {
-                int defaults_index = (lua_gettop(L) >= 2 && lua_istable(L, 2)) ? 2 : 0;
-                auto [requests, default_pool] = ParseLoadRequests(L, 1, defaults_index, ResourceType::TrueTypeFont);
-                
-                if (requests.empty())
-                {
-                    return luaL_error(L, "No valid load requests");
-                }
-                
-                auto* loader = LAPP.GetAsyncResourceLoader();
-                if (!loader)
-                {
-                    return luaL_error(L, "AsyncResourceLoader not initialized");
-                }
-                
-                auto task = loader->SubmitTask(std::move(requests), true, default_pool);
-                if (!task)
-                {
-                    return luaL_error(L, "Failed to submit loading task");
-                }
-                
-                LuaLoadingTask::create(L, task);
-                return 1;
-            }
-            catch (const std::exception& e)
-            {
-                return luaL_error(L, "LoadFontAsync failed: %s", e.what());
-            }
+            return LoadResourceAsync<ResourceType::TrueTypeFont>(L);
         }
         
         static int LoadSpriteFontAsync(lua_State* L) noexcept
         {
-            try
-            {
-                int defaults_index = (lua_gettop(L) >= 2 && lua_istable(L, 2)) ? 2 : 0;
-                auto [requests, default_pool] = ParseLoadRequests(L, 1, defaults_index, ResourceType::SpriteFont);
-                
-                if (requests.empty())
-                {
-                    return luaL_error(L, "No valid load requests");
-                }
-                
-                auto* loader = LAPP.GetAsyncResourceLoader();
-                if (!loader)
-                {
-                    return luaL_error(L, "AsyncResourceLoader not initialized");
-                }
-                
-                auto task = loader->SubmitTask(std::move(requests), true, default_pool);
-                if (!task)
-                {
-                    return luaL_error(L, "Failed to submit loading task");
-                }
-                
-                LuaLoadingTask::create(L, task);
-                return 1;
-            }
-            catch (const std::exception& e)
-            {
-                return luaL_error(L, "LoadSpriteFontAsync failed: %s", e.what());
-            }
+            return LoadResourceAsync<ResourceType::SpriteFont>(L);
         }
         
         static int LoadFXAsync(lua_State* L) noexcept
         {
-            try
-            {
-                int defaults_index = (lua_gettop(L) >= 2 && lua_istable(L, 2)) ? 2 : 0;
-                auto [requests, default_pool] = ParseLoadRequests(L, 1, defaults_index, ResourceType::FX);
-                
-                if (requests.empty())
-                {
-                    return luaL_error(L, "No valid load requests");
-                }
-                
-                auto* loader = LAPP.GetAsyncResourceLoader();
-                if (!loader)
-                {
-                    return luaL_error(L, "AsyncResourceLoader not initialized");
-                }
-                
-                auto task = loader->SubmitTask(std::move(requests), true, default_pool);
-                if (!task)
-                {
-                    return luaL_error(L, "Failed to submit loading task");
-                }
-                
-                LuaLoadingTask::create(L, task);
-                return 1;
-            }
-            catch (const std::exception& e)
-            {
-                return luaL_error(L, "LoadFXAsync failed: %s", e.what());
-            }
+            return LoadResourceAsync<ResourceType::FX>(L);
         }
         
         static int LoadModelAsync(lua_State* L) noexcept
         {
-            try
-            {
-                int defaults_index = (lua_gettop(L) >= 2 && lua_istable(L, 2)) ? 2 : 0;
-                auto [requests, default_pool] = ParseLoadRequests(L, 1, defaults_index, ResourceType::Model);
-                
-                if (requests.empty())
-                {
-                    return luaL_error(L, "No valid load requests");
-                }
-                
-                auto* loader = LAPP.GetAsyncResourceLoader();
-                if (!loader)
-                {
-                    return luaL_error(L, "AsyncResourceLoader not initialized");
-                }
-                
-                auto task = loader->SubmitTask(std::move(requests), true, default_pool);
-                if (!task)
-                {
-                    return luaL_error(L, "Failed to submit loading task");
-                }
-                
-                LuaLoadingTask::create(L, task);
-                return 1;
-            }
-            catch (const std::exception& e)
-            {
-                return luaL_error(L, "LoadModelAsync failed: %s", e.what());
-            }
+            return LoadResourceAsync<ResourceType::Model>(L);
         }
         
         static int LoadParticleAsync(lua_State* L) noexcept
         {
-            try
+            return LoadResourceAsync<ResourceType::Particle>(L);
+        }
+        
+        static int GetAsyncLoaderThreadCount(lua_State* L) noexcept
+        {
+            auto* loader = LAPP.GetAsyncResourceLoader();
+            lua_pushinteger(L, loader ? static_cast<lua_Integer>(loader->GetThreadCount()) : 0);
+            return 1;
+        }
+        
+        static int SetAsyncLoaderMaxItemsPerFrame(lua_State* L) noexcept
+        {
+            auto* loader = LAPP.GetAsyncResourceLoader();
+            if (!loader)
             {
-                int defaults_index = (lua_gettop(L) >= 2 && lua_istable(L, 2)) ? 2 : 0;
-                auto [requests, default_pool] = ParseLoadRequests(L, 1, defaults_index, ResourceType::Particle);
-                
-                if (requests.empty())
-                {
-                    return luaL_error(L, "No valid load requests");
-                }
-                
-                auto* loader = LAPP.GetAsyncResourceLoader();
-                if (!loader)
-                {
-                    return luaL_error(L, "AsyncResourceLoader not initialized");
-                }
-                
-                auto task = loader->SubmitTask(std::move(requests), true, default_pool);
-                if (!task)
-                {
-                    return luaL_error(L, "Failed to submit loading task");
-                }
-                
-                LuaLoadingTask::create(L, task);
-                return 1;
+                return luaL_error(L, "AsyncResourceLoader not initialized");
             }
-            catch (const std::exception& e)
+            lua_Integer count = luaL_checkinteger(L, 1);
+            if (count < 1)
             {
-                return luaL_error(L, "LoadParticleAsync failed: %s", e.what());
+                return luaL_error(L, "MaxGPUItemsPerFrame must be at least 1");
             }
+            loader->SetMaxGPUItemsPerFrame(static_cast<size_t>(count));
+            return 0;
+        }
+        
+        static int GetAsyncLoaderMaxItemsPerFrame(lua_State* L) noexcept
+        {
+            auto* loader = LAPP.GetAsyncResourceLoader();
+            lua_pushinteger(L, loader ? static_cast<lua_Integer>(loader->GetMaxGPUItemsPerFrame()) : 0);
+            return 1;
+        }
+        
+        static int ClearAsyncLoaderTasks(lua_State* L) noexcept
+        {
+            auto* loader = LAPP.GetAsyncResourceLoader();
+            if (loader)
+            {
+                loader->ClearAllTasks();
+            }
+            return 0;
         }
         
         static void Register(lua_State* L) noexcept
@@ -1038,117 +686,21 @@ namespace luastg::binding
             LuaLoadingTask::registerClass(L);
             
             // 注册异步加载函数
-            struct Wrapper
-            {
-                static int LoadTextureAsync(lua_State* L) noexcept
-                {
-                    return AsyncResourceManager::LoadTextureAsync(L);
-                }
-                static int LoadSpriteAsync(lua_State* L) noexcept
-                {
-                    return AsyncResourceManager::LoadSpriteAsync(L);
-                }
-                static int LoadAnimationAsync(lua_State* L) noexcept
-                {
-                    return AsyncResourceManager::LoadAnimationAsync(L);
-                }
-                static int LoadMusicAsync(lua_State* L) noexcept
-                {
-                    return AsyncResourceManager::LoadMusicAsync(L);
-                }
-                static int LoadSoundAsync(lua_State* L) noexcept
-                {
-                    return AsyncResourceManager::LoadSoundAsync(L);
-                }
-                static int LoadFontAsync(lua_State* L) noexcept
-                {
-                    return AsyncResourceManager::LoadFontAsync(L);
-                }
-                static int LoadSpriteFontAsync(lua_State* L) noexcept
-                {
-                    return AsyncResourceManager::LoadSpriteFontAsync(L);
-                }
-                static int LoadFXAsync(lua_State* L) noexcept
-                {
-                    return AsyncResourceManager::LoadFXAsync(L);
-                }
-                static int LoadModelAsync(lua_State* L) noexcept
-                {
-                    return AsyncResourceManager::LoadModelAsync(L);
-                }
-                static int LoadParticleAsync(lua_State* L) noexcept
-                {
-                    return AsyncResourceManager::LoadParticleAsync(L);
-                }
-                static int GetAsyncLoaderThreadCount(lua_State* L) noexcept
-                {
-                    auto* loader = LAPP.GetAsyncResourceLoader();
-                    if (!loader)
-                    {
-                        lua_pushinteger(L, 0);
-                    }
-                    else
-                    {
-                        lua_pushinteger(L, static_cast<lua_Integer>(loader->GetThreadCount()));
-                    }
-                    return 1;
-                }
-                static int SetAsyncLoaderMaxItemsPerFrame(lua_State* L) noexcept
-                {
-                    auto* loader = LAPP.GetAsyncResourceLoader();
-                    if (!loader)
-                    {
-                        return luaL_error(L, "AsyncResourceLoader not initialized");
-                    }
-                    
-                    lua_Integer count = luaL_checkinteger(L, 1);
-                    if (count < 1)
-                    {
-                        return luaL_error(L, "MaxGPUItemsPerFrame must be at least 1");
-                    }
-                    
-                    loader->SetMaxGPUItemsPerFrame(static_cast<size_t>(count));
-                    return 0;
-                }
-                static int GetAsyncLoaderMaxItemsPerFrame(lua_State* L) noexcept
-                {
-                    auto* loader = LAPP.GetAsyncResourceLoader();
-                    if (!loader)
-                    {
-                        lua_pushinteger(L, 0);
-                    }
-                    else
-                    {
-                        lua_pushinteger(L, static_cast<lua_Integer>(loader->GetMaxGPUItemsPerFrame()));
-                    }
-                    return 1;
-                }
-                static int ClearAsyncLoaderTasks(lua_State* L) noexcept
-                {
-                    auto* loader = LAPP.GetAsyncResourceLoader();
-                    if (loader)
-                    {
-                        loader->ClearAllTasks();
-                    }
-                    return 0;
-                }
-            };
-            
             luaL_Reg const lib[] = {
-                { "LoadTextureAsync", &Wrapper::LoadTextureAsync },
-                { "LoadSpriteAsync", &Wrapper::LoadSpriteAsync },
-                { "LoadAnimationAsync", &Wrapper::LoadAnimationAsync },
-                { "LoadMusicAsync", &Wrapper::LoadMusicAsync },
-                { "LoadSoundAsync", &Wrapper::LoadSoundAsync },
-                { "LoadFontAsync", &Wrapper::LoadFontAsync },
-                { "LoadSpriteFontAsync", &Wrapper::LoadSpriteFontAsync },
-                { "LoadFXAsync", &Wrapper::LoadFXAsync },
-                { "LoadModelAsync", &Wrapper::LoadModelAsync },
-                { "LoadParticleAsync", &Wrapper::LoadParticleAsync },
-                { "GetAsyncLoaderThreadCount", &Wrapper::GetAsyncLoaderThreadCount },
-                { "SetAsyncLoaderMaxItemsPerFrame", &Wrapper::SetAsyncLoaderMaxItemsPerFrame },
-                { "GetAsyncLoaderMaxItemsPerFrame", &Wrapper::GetAsyncLoaderMaxItemsPerFrame },
-                { "ClearAsyncLoaderTasks", &Wrapper::ClearAsyncLoaderTasks },
+                { "LoadTextureAsync", &LoadTextureAsync },
+                { "LoadSpriteAsync", &LoadSpriteAsync },
+                { "LoadAnimationAsync", &LoadAnimationAsync },
+                { "LoadMusicAsync", &LoadMusicAsync },
+                { "LoadSoundAsync", &LoadSoundAsync },
+                { "LoadFontAsync", &LoadFontAsync },
+                { "LoadSpriteFontAsync", &LoadSpriteFontAsync },
+                { "LoadFXAsync", &LoadFXAsync },
+                { "LoadModelAsync", &LoadModelAsync },
+                { "LoadParticleAsync", &LoadParticleAsync },
+                { "GetAsyncLoaderThreadCount", &GetAsyncLoaderThreadCount },
+                { "SetAsyncLoaderMaxItemsPerFrame", &SetAsyncLoaderMaxItemsPerFrame },
+                { "GetAsyncLoaderMaxItemsPerFrame", &GetAsyncLoaderMaxItemsPerFrame },
+                { "ClearAsyncLoaderTasks", &ClearAsyncLoaderTasks },
                 { nullptr, nullptr }
             };
             
