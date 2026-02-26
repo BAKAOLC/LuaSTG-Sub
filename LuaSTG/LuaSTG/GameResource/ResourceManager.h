@@ -29,6 +29,7 @@ namespace luastg
     class ResourcePool
     {
         friend class ResourceMgr;
+        friend class AsyncResourceLoader;
     public:
         struct dictionary_key_t
         {

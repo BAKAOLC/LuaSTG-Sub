@@ -62,6 +62,8 @@ static std::unordered_map<std::string_view, std::string_view> i18n_map[2] = {
         {"config-timing", "计时系统"},
         {"config-timing-frame-rate", "目标帧率"},
         {"config-timing-frame-rate-warn", "警告：随意修改目标帧率可能会造成严重后果"},
+        {"config-timing-async-loader-threads", "异步资源加载器线程数"},
+        {"config-timing-async-loader-threads-hint", "提示：设置为 0 表示自动检测（推荐）"},
         {"config-window", "窗口"},
         {"config-window-title", "窗口标题"},
         {"config-window-cursor-visible", "显示鼠标"},
@@ -117,6 +119,8 @@ static std::unordered_map<std::string_view, std::string_view> i18n_map[2] = {
         {"config-timing", "Timing"},
         {"config-timing-frame-rate", "Target frame rate"},
         {"config-timing-frame-rate-warn", "Warning: Arbitrarily modifying the target frame rate may lead to serious consequences."},
+        {"config-timing-async-loader-threads", "Async resource loader threads"},
+        {"config-timing-async-loader-threads-hint", "Hint: Set to 0 for auto-detection (recommended)"},
         {"config-window", "Window"},
         {"config-window-title", "Window title"},
         {"config-window-cursor-visible", "Show mouse cursor"},
@@ -598,6 +602,12 @@ struct Window
         showIntegerEdit(config_json, "/timing/frame_rate"_json_pointer, "config-timing-frame-rate"sv, 60, 1);
         ImGui::AlignTextToFramePadding();
         ImGui::TextColored(ImColor(1.0f, 0.1f, 0.1f), i18n_c_str("config-timing-frame-rate-warn"sv));
+        
+        if (show_advance) {
+            showIntegerEdit(config_json, "/timing/async_loader_threads"_json_pointer, "config-timing-async-loader-threads"sv, 0, 0);
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextColored(ImColor(0.5f, 0.5f, 0.5f), i18n_c_str("config-timing-async-loader-threads-hint"sv));
+        }
     }
     void LayoutWindowTab() {
         if (show_advance) {

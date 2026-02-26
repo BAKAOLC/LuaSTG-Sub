@@ -173,6 +173,26 @@ bool AppFrame::Init()noexcept
 		spdlog::error("[luastg] 无法为对象池分配内存");
 		return false;
 	}
+	
+	//////////////////////////////////////// 异步资源加载器
+	
+	spdlog::info("[luastg] 初始化异步资源加载器");
+	try {
+		// 从配置读取线程数，0 表示自动检测
+		auto const& timing_config = core::ConfigurationLoader::getInstance().getTiming();
+		size_t thread_count = timing_config.getAsyncLoaderThreads();
+		
+		if (thread_count > 0) {
+			spdlog::info("[luastg] 从配置读取异步加载器线程数: {}", thread_count);
+		}
+		
+		// 0 表示自动检测（推荐）
+		m_async_resource_loader = std::make_unique<AsyncResourceLoader>(thread_count);
+	}
+	catch (const std::exception& e) {
+		spdlog::error("[luastg] 初始化异步资源加载器失败: {}", e.what());
+		return false;
+	}
 
 	//////////////////////////////////////// Lua 引擎
 
@@ -284,6 +304,9 @@ void AppFrame::Shutdown()noexcept
 
 	m_GameObjectPool = nullptr;
 	spdlog::info("[luastg] 清空对象池");
+	
+	m_async_resource_loader.reset();
+	spdlog::info("[luastg] 关闭异步资源加载器");
 
 	if (L)
 	{
@@ -492,6 +515,12 @@ bool AppFrame::onUpdateInternal()
 		}
 
 		UpdateInput();
+	}
+	
+	// 更新异步资源加载器（处理 GPU 资源创建）
+	if (m_async_resource_loader) {
+		tracy_zone_scoped_with_name("AsyncResourceLoader-Update");
+		m_async_resource_loader->Update();
 	}
 
 #if (defined(_DEBUG) && defined(LuaSTG_enable_GameObjectManager_Debug))
