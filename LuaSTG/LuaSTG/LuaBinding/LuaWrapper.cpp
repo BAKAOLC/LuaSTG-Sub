@@ -26,6 +26,9 @@
 
 namespace luastg::binding
 {
+	void RegisterAsyncResourceManager(lua_State* L);
+	void RegisterAsyncTexture2D(lua_State* L);
+	void RegisterAsyncSprite(lua_State* L);
 	static int lib_StopWatch(lua_State* L) noexcept
 	{
 		StopWatch::CreateAndPush(L);
@@ -65,6 +68,11 @@ namespace luastg::binding
 		Archive::Register(L); //压缩包
 		lua_settop(L, 0);
 		luaopen_LuaSTG_Sub(L);
+		
+		// 异步资源加载
+		RegisterAsyncResourceManager(L);
+		RegisterAsyncTexture2D(L);
+		RegisterAsyncSprite(L);
 
 		// external
 
