@@ -151,6 +151,10 @@ namespace luastg
         core::SmartReference<core::IAudioDecoder> audio_decoder;
         std::vector<uint8_t> file_data;
         
+        // 纹理加载的中间数据（在工作线程中准备，主线程中上传）
+        core::SmartReference<core::IImage> image_data;  // 图像数据
+        bool needs_mipmap_generation = false;  // 是否需要在主线程生成 mipmap
+        
         // 是否需要GPU操作（纹理、模型等）
         // false = 纯CPU资源，主线程只需快速注册，不受限制
         // true = GPU资源，主线程需要上传，受每帧限制
@@ -271,6 +275,33 @@ namespace luastg
             std::shared_ptr<ResourceLoadingTask> task,
             size_t request_index
         );
+        
+        // 工具函数：检查文件是否为 DDS 格式（通过魔数）
+        static bool IsDDSFormat(const void* data, size_t size);
+        
+        // 工具函数：在工作线程中加载图像数据
+        // 返回 true 表示成功，图像数据保存在 out_image_data 或 out_file_data 中
+        static bool LoadImageDataInWorkerThread(
+            const std::string& file_path,
+            bool enable_mipmaps,
+            core::SmartReference<core::IImage>& out_image_data,
+            std::vector<uint8_t>& out_file_data,
+            bool& out_needs_mipmap_generation,
+            std::string& out_error_message
+        );
+        
+        // 辅助函数：初始化Worker结果
+        static ResourceLoadResult InitWorkerResult(const ResourceLoadRequest& request, bool requires_gpu = true);
+        
+        // 辅助函数：检查文件存在性
+        static bool ValidateFilePath(const std::string& path, ResourceLoadResult& result);
+        
+        // 辅助函数：获取目标资源池
+        ResourcePool* GetTargetResourcePool(std::shared_ptr<ResourceLoadingTask> task, const ResourceLoadRequest& request) const;
+        
+        // 辅助函数：包装Complete函数的通用逻辑
+        template<typename Func>
+        void ExecuteComplete(std::shared_ptr<ResourceLoadingTask> task, size_t index, ResourceLoadResult& result, Func&& func);
         
         // 资源加载函数（在工作线程中调用，只做 CPU 端工作）
         ResourceLoadResult LoadTextureWorker(const ResourceLoadRequest& request);

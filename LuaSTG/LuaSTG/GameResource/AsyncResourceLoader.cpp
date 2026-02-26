@@ -9,8 +9,10 @@
 #include "GameResource/Implement/ResourceParticleImpl.hpp"
 #include "core/FileSystem.hpp"
 #include "core/AudioDecoder.hpp"
+#include "core/Image.hpp"
 #include "AppFrame.h"
 #include <spdlog/spdlog.h>
+#include <cstring>
 
 namespace luastg
 {
@@ -524,22 +526,162 @@ namespace luastg
         }
     }
     
-    // Worker 函数（在工作线程中执行，只做 CPU 端工作）
+    // 辅助函数实现
     
-    ResourceLoadResult AsyncResourceLoader::LoadTextureWorker(const ResourceLoadRequest& request)
+    ResourceLoadResult AsyncResourceLoader::InitWorkerResult(const ResourceLoadRequest& request, bool requires_gpu)
     {
         ResourceLoadResult result;
         result.name = request.name;
-        result.type = ResourceType::Texture;
+        result.type = request.type;
+        result.requires_gpu = requires_gpu;
+        return result;
+    }
+    
+    bool AsyncResourceLoader::ValidateFilePath(const std::string& path, ResourceLoadResult& result)
+    {
+        if (path.empty())
+        {
+            return true;  // 空路径可能是合法的（如创建空纹理）
+        }
         
-        const auto& params = std::get<TextureLoadParams>(request.params);
-        
-        // 检查文件是否存在
-        if (!params.path.empty() && !core::FileSystemManager::hasFile(params.path))
+        if (!core::FileSystemManager::hasFile(path))
         {
             result.success = false;
-            result.error_message = "File not found: " + params.path;
+            result.error_message = "File not found: " + path;
+            return false;
+        }
+        
+        return true;
+    }
+    
+    ResourcePool* AsyncResourceLoader::GetTargetResourcePool(
+        std::shared_ptr<ResourceLoadingTask> task, 
+        const ResourceLoadRequest& request) const
+    {
+        if (!task->UseResourcePool())
+        {
+            return nullptr;
+        }
+        
+        return request.target_pool ? request.target_pool : task->GetTargetPool();
+    }
+    
+    template<typename Func>
+    void AsyncResourceLoader::ExecuteComplete(
+        std::shared_ptr<ResourceLoadingTask> task, 
+        size_t index, 
+        ResourceLoadResult& result, 
+        Func&& func)
+    {
+        if (!result.success)
+        {
+            return;
+        }
+        
+        try
+        {
+            auto pool = GetTargetResourcePool(task, task->GetRequests()[index]);
+            
+            if (task->UseResourcePool() && !pool)
+            {
+                result.success = false;
+                result.error_message = "No active resource pool";
+                return;
+            }
+            
+            func(pool);
+        }
+        catch (const std::exception& e)
+        {
+            result.success = false;
+            result.error_message = e.what();
+        }
+    }
+    
+    // Worker 函数（在工作线程中执行，只做 CPU 端工作）
+    
+    // 工具函数：检查文件是否为 DDS 格式（通过魔数）
+    bool AsyncResourceLoader::IsDDSFormat(const void* data, size_t size)
+    {
+        if (size < 4)
+        {
+            return false;
+        }
+        
+        // DDS 文件以 "DDS " (0x44 0x44 0x53 0x20) 开头
+        const uint8_t* bytes = static_cast<const uint8_t*>(data);
+        return (bytes[0] == 0x44 && bytes[1] == 0x44 && bytes[2] == 0x53 && bytes[3] == 0x20);
+    }
+    
+    // 工具函数：在工作线程中加载图像数据
+    bool AsyncResourceLoader::LoadImageDataInWorkerThread(
+        const std::string& file_path,
+        bool enable_mipmaps,
+        core::SmartReference<core::IImage>& out_image_data,
+        std::vector<uint8_t>& out_file_data,
+        bool& out_needs_mipmap_generation,
+        std::string& out_error_message)
+    {
+        // 读取文件数据
+        core::SmartReference<core::IData> file_data;
+        if (!core::FileSystemManager::readFile(file_path, file_data.put()))
+        {
+            out_error_message = "Failed to read file: " + file_path;
+            return false;
+        }
+        
+        // 检查文件魔数判断是否为 DDS 格式
+        bool is_dds = IsDDSFormat(file_data->data(), file_data->size());
+        
+        if (!is_dds)
+        {
+            // 非 DDS 格式，解码为图像
+            core::SmartReference<core::IImage> image;
+            if (!core::ImageFactory::createFromData(file_data.get(), image.put()))
+            {
+                out_error_message = "Failed to decode image from file: " + file_path;
+                return false;
+            }
+            
+            // 保存图像数据，稍后在主线程中创建纹理
+            out_image_data = image;
+            out_needs_mipmap_generation = enable_mipmaps;
+        }
+        else
+        {
+            // DDS 格式，保存原始文件数据，在主线程中处理
+            out_file_data.resize(file_data->size());
+            std::memcpy(out_file_data.data(), file_data->data(), file_data->size());
+            out_needs_mipmap_generation = false;  // DDS 自带 mipmap 或由 DirectXTex 处理
+        }
+        
+        return true;
+    }
+    
+    ResourceLoadResult AsyncResourceLoader::LoadTextureWorker(const ResourceLoadRequest& request)
+    {
+        auto result = InitWorkerResult(request);
+        const auto& params = std::get<TextureLoadParams>(request.params);
+        
+        if (!ValidateFilePath(params.path, result))
+        {
             return result;
+        }
+        
+        // 如果需要从文件加载纹理
+        if (!params.path.empty())
+        {
+            if (!LoadImageDataInWorkerThread(
+                params.path,
+                params.mipmaps,
+                result.image_data,
+                result.file_data,
+                result.needs_mipmap_generation,
+                result.error_message))
+            {
+                result.success = false;
+                return result;
+            }
         }
         
         result.success = true;
@@ -548,39 +690,25 @@ namespace luastg
     
     ResourceLoadResult AsyncResourceLoader::LoadSpriteWorker(const ResourceLoadRequest& request)
     {
-        ResourceLoadResult result;
-        result.name = request.name;
-        result.type = ResourceType::Sprite;
-        result.requires_gpu = false;
-        
+        auto result = InitWorkerResult(request, false);
         result.success = true;
         return result;
     }
     
     ResourceLoadResult AsyncResourceLoader::LoadAnimationWorker(const ResourceLoadRequest& request)
     {
-        ResourceLoadResult result;
-        result.name = request.name;
-        result.type = ResourceType::Animation;
-        result.requires_gpu = false;
-        
+        auto result = InitWorkerResult(request, false);
         result.success = true;
         return result;
     }
     
     ResourceLoadResult AsyncResourceLoader::LoadMusicWorker(const ResourceLoadRequest& request)
     {
-        ResourceLoadResult result;
-        result.name = request.name;
-        result.type = ResourceType::Music;
-        result.requires_gpu = false;
-        
+        auto result = InitWorkerResult(request, false);
         const auto& params = std::get<MusicLoadParams>(request.params);
         
-        if (!core::FileSystemManager::hasFile(params.path))
+        if (!ValidateFilePath(params.path, result))
         {
-            result.success = false;
-            result.error_message = "File not found: " + params.path;
             return result;
         }
         
@@ -597,17 +725,11 @@ namespace luastg
     
     ResourceLoadResult AsyncResourceLoader::LoadSoundEffectWorker(const ResourceLoadRequest& request)
     {
-        ResourceLoadResult result;
-        result.name = request.name;
-        result.type = ResourceType::SoundEffect;
-        result.requires_gpu = false;
-        
+        auto result = InitWorkerResult(request, false);
         const auto& params = std::get<SoundEffectLoadParams>(request.params);
         
-        if (!core::FileSystemManager::hasFile(params.path))
+        if (!ValidateFilePath(params.path, result))
         {
-            result.success = false;
-            result.error_message = "File not found: " + params.path;
             return result;
         }
         
@@ -624,25 +746,34 @@ namespace luastg
     
     ResourceLoadResult AsyncResourceLoader::LoadSpriteFontWorker(const ResourceLoadRequest& request)
     {
-        ResourceLoadResult result;
-        result.name = request.name;
-        result.type = request.type;
-        
+        auto result = InitWorkerResult(request);
         const auto& params = std::get<SpriteFontLoadParams>(request.params);
         
-        if (!core::FileSystemManager::hasFile(params.path))
+        if (!ValidateFilePath(params.path, result))
         {
-            result.success = false;
-            result.error_message = "File not found: " + params.path;
             return result;
         }
         
         // 如果有 tex_path，也需要检查
-        if (!params.font_tex_path.empty() && !core::FileSystemManager::hasFile(params.font_tex_path))
+        if (!params.font_tex_path.empty() && !ValidateFilePath(params.font_tex_path, result))
         {
-            result.success = false;
-            result.error_message = "Texture file not found: " + params.font_tex_path;
             return result;
+        }
+        
+        // 如果有纹理文件，在工作线程中预加载图像数据
+        if (!params.font_tex_path.empty())
+        {
+            if (!LoadImageDataInWorkerThread(
+                params.font_tex_path,
+                params.mipmaps,
+                result.image_data,
+                result.file_data,
+                result.needs_mipmap_generation,
+                result.error_message))
+            {
+                result.success = false;
+                return result;
+            }
         }
         
         result.success = true;
@@ -651,16 +782,11 @@ namespace luastg
     
     ResourceLoadResult AsyncResourceLoader::LoadTrueTypeFontWorker(const ResourceLoadRequest& request)
     {
-        ResourceLoadResult result;
-        result.name = request.name;
-        result.type = request.type;
-        
+        auto result = InitWorkerResult(request);
         const auto& params = std::get<TrueTypeFontLoadParams>(request.params);
         
-        if (!core::FileSystemManager::hasFile(params.path))
+        if (!ValidateFilePath(params.path, result))
         {
-            result.success = false;
-            result.error_message = "File not found: " + params.path;
             return result;
         }
         
@@ -677,16 +803,11 @@ namespace luastg
     
     ResourceLoadResult AsyncResourceLoader::LoadFXWorker(const ResourceLoadRequest& request)
     {
-        ResourceLoadResult result;
-        result.name = request.name;
-        result.type = request.type;
-        
+        auto result = InitWorkerResult(request);
         const auto& params = std::get<FXLoadParams>(request.params);
         
-        if (!core::FileSystemManager::hasFile(params.path))
+        if (!ValidateFilePath(params.path, result))
         {
-            result.success = false;
-            result.error_message = "File not found: " + params.path;
             return result;
         }
         
@@ -696,16 +817,11 @@ namespace luastg
     
     ResourceLoadResult AsyncResourceLoader::LoadModelWorker(const ResourceLoadRequest& request)
     {
-        ResourceLoadResult result;
-        result.name = request.name;
-        result.type = request.type;
-        
+        auto result = InitWorkerResult(request);
         const auto& params = std::get<ModelLoadParams>(request.params);
         
-        if (!core::FileSystemManager::hasFile(params.path))
+        if (!ValidateFilePath(params.path, result))
         {
-            result.success = false;
-            result.error_message = "File not found: " + params.path;
             return result;
         }
         
@@ -715,17 +831,11 @@ namespace luastg
     
     ResourceLoadResult AsyncResourceLoader::LoadParticleWorker(const ResourceLoadRequest& request)
     {
-        ResourceLoadResult result;
-        result.name = request.name;
-        result.type = ResourceType::Particle;
-        result.requires_gpu = false;
-        
+        auto result = InitWorkerResult(request, false);
         const auto& params = std::get<ParticleLoadParams>(request.params);
         
-        if (!core::FileSystemManager::hasFile(params.path))
+        if (!ValidateFilePath(params.path, result))
         {
-            result.success = false;
-            result.error_message = "File not found: " + params.path;
             return result;
         }
         
@@ -735,660 +845,515 @@ namespace luastg
     
     // Complete 函数（在主线程中执行，创建 GPU 资源和注册到资源池）
     
+    // 辅助宏：简化Complete函数的通用检查
+    #define BEGIN_COMPLETE_FUNCTION() \
+        if (!result.success) { return; } \
+        const auto& request = task->GetRequests()[index]; \
+        try {
+    
+    #define END_COMPLETE_FUNCTION() \
+        } catch (const std::exception& e) { \
+            result.success = false; \
+            result.error_message = e.what(); \
+        }
+    
+    #define GET_POOL_OR_FAIL(pool_var) \
+        auto pool_var = GetTargetResourcePool(task, request); \
+        if (task->UseResourcePool() && !pool_var) { \
+            result.success = false; \
+            result.error_message = "No active resource pool"; \
+            return; \
+        }
+    
+    #define MARK_SUCCESS_IF_REGISTERED() \
+        if (result.success) { \
+            result.registered_to_pool = true; \
+        }
+    
     void AsyncResourceLoader::CompleteTexture(std::shared_ptr<ResourceLoadingTask> task, size_t index, ResourceLoadResult& result)
     {
-        if (!result.success)
-        {
-            return;
-        }
+        BEGIN_COMPLETE_FUNCTION()
         
-        const auto& request = task->GetRequests()[index];
         const auto& params = std::get<TextureLoadParams>(request.params);
         
-        try
+        if (task->UseResourcePool())
         {
-            if (task->UseResourcePool())
+            GET_POOL_OR_FAIL(pool)
+            
+            // 如果有图像数据（非 DDS 格式）
+            if (result.image_data)
             {
-                // 使用资源池 API
-                auto pool = request.target_pool ? request.target_pool : task->GetTargetPool();
-                if (!pool)
+                // 使用图像数据创建纹理
+                core::SmartReference<core::ITexture2D> p_texture;
+                if (!LAPP.getGraphicsDevice()->createTextureFromImage(result.image_data.get(), result.needs_mipmap_generation, p_texture.put()))
                 {
                     result.success = false;
-                    result.error_message = "No active resource pool";
+                    result.error_message = "Failed to create texture from image data";
                     return;
                 }
                 
-                // 调用资源池的加载函数
-                if (!params.path.empty())
-                {
-                    result.success = pool->LoadTexture(request.name.c_str(), params.path.c_str(), params.mipmaps);
-                }
-                else if (params.width > 0 && params.height > 0)
-                {
-                    result.success = pool->CreateTexture(request.name.c_str(), params.width, params.height);
-                }
-                else
-                {
-                    result.success = false;
-                    result.error_message = "Invalid texture parameters";
-                }
-                
-                if (result.success)
-                {
-                    result.registered_to_pool = true;
-                }
-                else
-                {
-                    result.error_message = "Failed to load texture to pool";
-                }
+                // 注册到资源池
+                core::SmartReference<IResourceTexture> tRes;
+                tRes.attach(new ResourceTextureImpl(request.name.c_str(), p_texture.get()));
+                pool->m_TexturePool.emplace(request.name.c_str(), tRes);
+                result.success = true;
+                result.registered_to_pool = true;
+            }
+            // 如果有文件数据（DDS 格式）
+            else if (!result.file_data.empty())
+            {
+                result.success = pool->LoadTexture(request.name.c_str(), params.path.c_str(), params.mipmaps);
+                MARK_SUCCESS_IF_REGISTERED()
+            }
+            // 创建空纹理
+            else if (params.width > 0 && params.height > 0)
+            {
+                result.success = pool->CreateTexture(request.name.c_str(), params.width, params.height);
+                MARK_SUCCESS_IF_REGISTERED()
             }
             else
             {
+                result.success = false;
+                result.error_message = "Invalid texture parameters";
+            }
+        }
+        else
+        {
+            // 现代 API
+            if (result.image_data)
+            {
+                core::SmartReference<core::ITexture2D> p_texture;
+                if (!LAPP.getGraphicsDevice()->createTextureFromImage(result.image_data.get(), result.needs_mipmap_generation, p_texture.put()))
+                {
+                    result.success = false;
+                    result.error_message = "Failed to create texture from image data";
+                    return;
+                }
+                result.texture = p_texture;
+                result.success = true;
+            }
+            else if (!result.file_data.empty())
+            {
+                // DDS 格式
                 core::SmartReference<core::ITexture2D> p_texture;
                 if (!LAPP.getGraphicsDevice()->createTextureFromFile(params.path.c_str(), params.mipmaps, p_texture.put()))
                 {
                     result.success = false;
-                    result.error_message = "Failed to create texture from file";
+                    result.error_message = "Failed to create texture from DDS file";
                     return;
                 }
-                
                 result.texture = p_texture;
                 result.success = true;
             }
+            else
+            {
+                result.success = false;
+                result.error_message = "No texture data available";
+            }
         }
-        catch (const std::exception& e)
-        {
-            result.success = false;
-            result.error_message = e.what();
-        }
+        
+        END_COMPLETE_FUNCTION()
     }
     
     void AsyncResourceLoader::CompleteSprite(std::shared_ptr<ResourceLoadingTask> task, size_t index, ResourceLoadResult& result)
     {
-        if (!result.success)
-        {
-            return;
-        }
+        BEGIN_COMPLETE_FUNCTION()
         
-        const auto& request = task->GetRequests()[index];
         const auto& params = std::get<SpriteLoadParams>(request.params);
         
-        try
+        if (task->UseResourcePool())
         {
-            if (task->UseResourcePool())
-            {
-                auto pool = request.target_pool ? request.target_pool : task->GetTargetPool();
-                if (!pool)
-                {
-                    result.success = false;
-                    result.error_message = "No active resource pool";
-                    return;
-                }
-                
-                result.success = pool->CreateSprite(
-                    request.name.c_str(),
-                    params.texture_name.c_str(),
-                    params.x, params.y, params.w, params.h,
-                    params.anchor_x, params.anchor_y,
-                    params.is_rect
-                );
-                
-                if (result.success)
-                {
-                    result.registered_to_pool = true;
-                }
-                else
-                {
-                    result.error_message = "Failed to create sprite";
-                }
-            }
-            else
-            {
-                if (!params.texture_object)
-                {
-                    result.success = false;
-                    result.error_message = "No texture object provided for modern API sprite";
-                    return;
-                }
-                
-                // 创建精灵对象
-                core::SmartReference<core::Graphics::ISprite> p_sprite;
-                if (!core::Graphics::ISprite::create(params.texture_object, p_sprite.put()))
-                {
-                    result.success = false;
-                    result.error_message = "Failed to create sprite from texture object";
-                    return;
-                }
-                
-                // 设置纹理矩形
-                p_sprite->setTextureRect(core::RectF(
-                    static_cast<float>(params.x),
-                    static_cast<float>(params.y),
-                    static_cast<float>(params.w),
-                    static_cast<float>(params.h)
-                ));
-                
-                // 设置锚点
-                p_sprite->setTextureCenter(core::Vector2F(
-                    static_cast<float>(params.anchor_x),
-                    static_cast<float>(params.anchor_y)
-                ));
-                
-                result.sprite = p_sprite;
-                result.success = true;
-            }
+            GET_POOL_OR_FAIL(pool)
+            
+            result.success = pool->CreateSprite(
+                request.name.c_str(),
+                params.texture_name.c_str(),
+                params.x, params.y, params.w, params.h,
+                params.anchor_x, params.anchor_y,
+                params.is_rect
+            );
+            
+            MARK_SUCCESS_IF_REGISTERED()
         }
-        catch (const std::exception& e)
+        else
         {
-            result.success = false;
-            result.error_message = e.what();
+            if (!params.texture_object)
+            {
+                result.success = false;
+                result.error_message = "No texture object provided for modern API sprite";
+                return;
+            }
+            
+            // 创建精灵对象
+            core::SmartReference<core::Graphics::ISprite> p_sprite;
+            if (!core::Graphics::ISprite::create(params.texture_object, p_sprite.put()))
+            {
+                result.success = false;
+                result.error_message = "Failed to create sprite from texture object";
+                return;
+            }
+            
+            // 设置纹理矩形
+            p_sprite->setTextureRect(core::RectF(
+                static_cast<float>(params.x),
+                static_cast<float>(params.y),
+                static_cast<float>(params.w),
+                static_cast<float>(params.h)
+            ));
+            
+            // 设置锚点
+            p_sprite->setTextureCenter(core::Vector2F(
+                static_cast<float>(params.anchor_x),
+                static_cast<float>(params.anchor_y)
+            ));
+            
+            result.sprite = p_sprite;
+            result.success = true;
         }
+        
+        END_COMPLETE_FUNCTION()
     }
     
     void AsyncResourceLoader::CompleteAnimation(std::shared_ptr<ResourceLoadingTask> task, size_t index, ResourceLoadResult& result)
     {
-        if (!result.success)
-        {
-            return;
-        }
+        BEGIN_COMPLETE_FUNCTION()
         
-        const auto& request = task->GetRequests()[index];
         const auto& params = std::get<AnimationLoadParams>(request.params);
         
-        try
+        if (task->UseResourcePool())
         {
-            if (task->UseResourcePool())
+            GET_POOL_OR_FAIL(pool)
+            
+            if (params.sprite_names.empty())
             {
-                auto pool = request.target_pool ? request.target_pool : task->GetTargetPool();
-                if (!pool)
-                {
-                    result.success = false;
-                    result.error_message = "No active resource pool";
-                    return;
-                }
-                
-                if (params.sprite_names.empty())
-                {
-                    // 从纹理创建
-                    result.success = pool->CreateAnimation(
-                        request.name.c_str(),
-                        params.texture_name.c_str(),
-                        params.x, params.y, params.w, params.h,
-                        params.n, params.m, params.interval,
-                        params.anchor_x, params.anchor_y,
-                        params.is_rect
-                    );
-                }
-                else
-                {
-                    // 从精灵列表创建
-                    std::vector<core::SmartReference<IResourceSprite>> sprites;
-                    for (const auto& sprite_name : params.sprite_names)
-                    {
-                        auto sprite = LRES.FindSprite(sprite_name.c_str());
-                        if (!sprite)
-                        {
-                            result.success = false;
-                            result.error_message = "Sprite not found: " + sprite_name;
-                            return;
-                        }
-                        sprites.push_back(sprite);
-                    }
-                    
-                    result.success = pool->CreateAnimation(
-                        request.name.c_str(),
-                        sprites,
-                        params.interval,
-                        params.anchor_x, params.anchor_y,
-                        params.is_rect
-                    );
-                }
-                
-                if (result.success)
-                {
-                    result.registered_to_pool = true;
-                }
-                else
-                {
-                    result.error_message = "Failed to create animation";
-                }
+                // 从纹理创建
+                result.success = pool->CreateAnimation(
+                    request.name.c_str(),
+                    params.texture_name.c_str(),
+                    params.x, params.y, params.w, params.h,
+                    params.n, params.m, params.interval,
+                    params.anchor_x, params.anchor_y,
+                    params.is_rect
+                );
             }
             else
             {
-                result.success = false;
-                result.error_message = "Modern API animation creation not implemented in async loader";
+                // 从精灵列表创建
+                std::vector<core::SmartReference<IResourceSprite>> sprites;
+                for (const auto& sprite_name : params.sprite_names)
+                {
+                    auto sprite = LRES.FindSprite(sprite_name.c_str());
+                    if (!sprite)
+                    {
+                        result.success = false;
+                        result.error_message = "Sprite not found: " + sprite_name;
+                        return;
+                    }
+                    sprites.push_back(sprite);
+                }
+                
+                result.success = pool->CreateAnimation(
+                    request.name.c_str(),
+                    sprites,
+                    params.interval,
+                    params.anchor_x, params.anchor_y,
+                    params.is_rect
+                );
             }
+            
+            MARK_SUCCESS_IF_REGISTERED()
         }
-        catch (const std::exception& e)
+        else
         {
             result.success = false;
-            result.error_message = e.what();
+            result.error_message = "Modern API animation creation not implemented in async loader";
         }
+        
+        END_COMPLETE_FUNCTION()
     }
     
     void AsyncResourceLoader::CompleteMusic(std::shared_ptr<ResourceLoadingTask> task, size_t index, ResourceLoadResult& result)
     {
-        if (!result.success)
-        {
-            return;
-        }
+        BEGIN_COMPLETE_FUNCTION()
         
-        const auto& request = task->GetRequests()[index];
         const auto& params = std::get<MusicLoadParams>(request.params);
         
-        try
+        if (task->UseResourcePool())
         {
-            if (task->UseResourcePool())
+            GET_POOL_OR_FAIL(pool)
+            
+            if (!result.audio_decoder)
             {
-                auto pool = request.target_pool ? request.target_pool : task->GetTargetPool();
-                if (!pool)
-                {
-                    result.success = false;
-                    result.error_message = "No active resource pool";
-                    return;
-                }
-                
-                if (!result.audio_decoder)
-                {
-                    result.success = false;
-                    result.error_message = "No audio decoder from worker thread";
-                    return;
-                }
-                
-                if (pool->CheckResourceExists(ResourceType::Music, request.name))
-                {
-                    result.success = true;
-                    result.registered_to_pool = true;
-                    return;
-                }
-                
-                auto to_sample = [&result](double t) -> uint32_t {
-                    return (uint32_t)(t * (double)result.audio_decoder->getSampleRate());
-                };
-                
-                double start = params.loop_start;
-                double end = params.loop_end;
-                
-                if (0 == to_sample(start) && to_sample(start) == to_sample(end))
-                {
-                    end = (double)result.audio_decoder->getFrameCount() / (double)result.audio_decoder->getSampleRate();
-                }
-                
-                if (to_sample(start) >= to_sample(end))
-                {
-                    result.success = false;
-                    result.error_message = "Invalid loop range";
-                    return;
-                }
-                
-                core::SmartReference<core::IAudioPlayer> p_player;
-                if (!params.once_decode)
-                {
-                    if (!LAPP.getAudioEngine()->createStreamAudioPlayer(result.audio_decoder.get(), core::AudioMixingChannel::music, p_player.put()))
-                    {
-                        result.success = false;
-                        result.error_message = "Failed to create stream audio player";
-                        return;
-                    }
-                }
-                else
-                {
-                    if (!LAPP.getAudioEngine()->createAudioPlayer(result.audio_decoder.get(), core::AudioMixingChannel::music, p_player.put()))
-                    {
-                        result.success = false;
-                        result.error_message = "Failed to create audio player";
-                        return;
-                    }
-                }
-                p_player->setLoop(true, start, end - start);
-                
-                core::SmartReference<IResourceMusic> tRes;
-                tRes.attach(new ResourceMusicImpl(request.name.c_str(), result.audio_decoder.get(), p_player.get()));
-                
-                pool->m_MusicPool.emplace(request.name.c_str(), tRes);
-                
+                result.success = false;
+                result.error_message = "No audio decoder from worker thread";
+                return;
+            }
+            
+            if (pool->CheckResourceExists(ResourceType::Music, request.name))
+            {
                 result.success = true;
                 result.registered_to_pool = true;
+                return;
+            }
+            
+            auto to_sample = [&result](double t) -> uint32_t {
+                return (uint32_t)(t * (double)result.audio_decoder->getSampleRate());
+            };
+            
+            double start = params.loop_start;
+            double end = params.loop_end;
+            
+            if (0 == to_sample(start) && to_sample(start) == to_sample(end))
+            {
+                end = (double)result.audio_decoder->getFrameCount() / (double)result.audio_decoder->getSampleRate();
+            }
+            
+            if (to_sample(start) >= to_sample(end))
+            {
+                result.success = false;
+                result.error_message = "Invalid loop range";
+                return;
+            }
+            
+            core::SmartReference<core::IAudioPlayer> p_player;
+            if (!params.once_decode)
+            {
+                if (!LAPP.getAudioEngine()->createStreamAudioPlayer(result.audio_decoder.get(), core::AudioMixingChannel::music, p_player.put()))
+                {
+                    result.success = false;
+                    result.error_message = "Failed to create stream audio player";
+                    return;
+                }
             }
             else
             {
-                result.success = false;
-                result.error_message = "Modern API music loading not implemented in async loader";
-            }
-        }
-        catch (const std::exception& e)
-        {
-            result.success = false;
-            result.error_message = e.what();
-        }
-    }
-    
-    void AsyncResourceLoader::CompleteSoundEffect(std::shared_ptr<ResourceLoadingTask> task, size_t index, ResourceLoadResult& result)
-    {
-        if (!result.success)
-        {
-            return;
-        }
-        
-        const auto& request = task->GetRequests()[index];
-        const auto& params = std::get<SoundEffectLoadParams>(request.params);
-        
-        try
-        {
-            if (task->UseResourcePool())
-            {
-                auto pool = request.target_pool ? request.target_pool : task->GetTargetPool();
-                if (!pool)
-                {
-                    result.success = false;
-                    result.error_message = "No active resource pool";
-                    return;
-                }
-                
-                if (!result.audio_decoder)
-                {
-                    result.success = false;
-                    result.error_message = "No audio decoder from worker thread";
-                    return;
-                }
-                
-                if (pool->CheckResourceExists(ResourceType::SoundEffect, request.name))
-                {
-                    result.success = true;
-                    result.registered_to_pool = true;
-                    return;
-                }
-                
-                core::SmartReference<core::IAudioPlayer> p_player;
-                if (!LAPP.getAudioEngine()->createAudioPlayer(result.audio_decoder.get(), core::AudioMixingChannel::sound_effect, p_player.put()))
+                if (!LAPP.getAudioEngine()->createAudioPlayer(result.audio_decoder.get(), core::AudioMixingChannel::music, p_player.put()))
                 {
                     result.success = false;
                     result.error_message = "Failed to create audio player";
                     return;
                 }
-                
-                core::SmartReference<IResourceSoundEffect> tRes;
-                tRes.attach(new ResourceSoundEffectImpl(request.name.c_str(), p_player.get()));
-                
-                pool->m_SoundSpritePool.emplace(request.name.c_str(), tRes);
-                
-                result.success = true;
-                result.registered_to_pool = true;
             }
-            else
-            {
-                result.success = false;
-                result.error_message = "Modern API sound effect loading not implemented in async loader";
-            }
+            p_player->setLoop(true, start, end - start);
+            
+            core::SmartReference<IResourceMusic> tRes;
+            tRes.attach(new ResourceMusicImpl(request.name.c_str(), result.audio_decoder.get(), p_player.get()));
+            
+            pool->m_MusicPool.emplace(request.name.c_str(), tRes);
+            
+            result.success = true;
+            result.registered_to_pool = true;
         }
-        catch (const std::exception& e)
+        else
         {
             result.success = false;
-            result.error_message = e.what();
+            result.error_message = "Modern API music loading not implemented in async loader";
         }
+        
+        END_COMPLETE_FUNCTION()
+    }
+    
+    void AsyncResourceLoader::CompleteSoundEffect(std::shared_ptr<ResourceLoadingTask> task, size_t index, ResourceLoadResult& result)
+    {
+        BEGIN_COMPLETE_FUNCTION()
+        
+        const auto& params = std::get<SoundEffectLoadParams>(request.params);
+        
+        if (task->UseResourcePool())
+        {
+            GET_POOL_OR_FAIL(pool)
+            
+            if (!result.audio_decoder)
+            {
+                result.success = false;
+                result.error_message = "No audio decoder from worker thread";
+                return;
+            }
+            
+            if (pool->CheckResourceExists(ResourceType::SoundEffect, request.name))
+            {
+                result.success = true;
+                result.registered_to_pool = true;
+                return;
+            }
+            
+            core::SmartReference<core::IAudioPlayer> p_player;
+            if (!LAPP.getAudioEngine()->createAudioPlayer(result.audio_decoder.get(), core::AudioMixingChannel::sound_effect, p_player.put()))
+            {
+                result.success = false;
+                result.error_message = "Failed to create audio player";
+                return;
+            }
+            
+            core::SmartReference<IResourceSoundEffect> tRes;
+            tRes.attach(new ResourceSoundEffectImpl(request.name.c_str(), p_player.get()));
+            
+            pool->m_SoundSpritePool.emplace(request.name.c_str(), tRes);
+            
+            result.success = true;
+            result.registered_to_pool = true;
+        }
+        else
+        {
+            result.success = false;
+            result.error_message = "Modern API sound effect loading not implemented in async loader";
+        }
+        
+        END_COMPLETE_FUNCTION()
     }
     
     void AsyncResourceLoader::CompleteSpriteFont(std::shared_ptr<ResourceLoadingTask> task, size_t index, ResourceLoadResult& result)
     {
-        if (!result.success)
-        {
-            return;
-        }
+        BEGIN_COMPLETE_FUNCTION()
         
-        const auto& request = task->GetRequests()[index];
         const auto& params = std::get<SpriteFontLoadParams>(request.params);
         
-        try
+        if (task->UseResourcePool())
         {
-            if (task->UseResourcePool())
+            GET_POOL_OR_FAIL(pool)
+            
+            if (params.font_tex_path.empty())
             {
-                auto pool = request.target_pool ? request.target_pool : task->GetTargetPool();
-                if (!pool)
-                {
-                    result.success = false;
-                    result.error_message = "No active resource pool";
-                    return;
-                }
-                
-                if (params.font_tex_path.empty())
-                {
-                    result.success = pool->LoadSpriteFont(
-                        request.name.c_str(),
-                        params.path.c_str(),
-                        params.mipmaps
-                    );
-                }
-                else
-                {
-                    result.success = pool->LoadSpriteFont(
-                        request.name.c_str(),
-                        params.path.c_str(),
-                        params.font_tex_path.c_str(),
-                        params.mipmaps
-                    );
-                }
-                
-                if (result.success)
-                {
-                    result.registered_to_pool = true;
-                }
-                else
-                {
-                    result.error_message = "Failed to load sprite font";
-                }
+                result.success = pool->LoadSpriteFont(
+                    request.name.c_str(),
+                    params.path.c_str(),
+                    params.mipmaps
+                );
             }
             else
             {
-                result.success = false;
-                result.error_message = "Modern API sprite font loading not implemented in async loader";
+                result.success = pool->LoadSpriteFont(
+                    request.name.c_str(),
+                    params.path.c_str(),
+                    params.font_tex_path.c_str(),
+                    params.mipmaps
+                );
             }
+            
+            MARK_SUCCESS_IF_REGISTERED()
         }
-        catch (const std::exception& e)
+        else
         {
             result.success = false;
-            result.error_message = e.what();
+            result.error_message = "Modern API sprite font loading not implemented in async loader";
         }
+        
+        END_COMPLETE_FUNCTION()
     }
     
     void AsyncResourceLoader::CompleteTrueTypeFont(std::shared_ptr<ResourceLoadingTask> task, size_t index, ResourceLoadResult& result)
     {
-        if (!result.success)
-        {
-            return;
-        }
+        BEGIN_COMPLETE_FUNCTION()
         
-        const auto& request = task->GetRequests()[index];
         const auto& params = std::get<TrueTypeFontLoadParams>(request.params);
         
-        try
+        if (task->UseResourcePool())
         {
-            if (task->UseResourcePool())
-            {
-                auto pool = request.target_pool ? request.target_pool : task->GetTargetPool();
-                if (!pool)
-                {
-                    result.success = false;
-                    result.error_message = "No active resource pool";
-                    return;
-                }
-                
-                result.success = pool->LoadTTFFont(
-                    request.name.c_str(),
-                    params.path.c_str(),
-                    params.font_width,
-                    params.font_height
-                );
-                
-                if (result.success)
-                {
-                    result.registered_to_pool = true;
-                }
-                else
-                {
-                    result.error_message = "Failed to load TrueType font";
-                }
-            }
-            else
-            {
-                result.success = false;
-                result.error_message = "Modern API TrueType font loading not implemented in async loader";
-            }
+            GET_POOL_OR_FAIL(pool)
+            
+            result.success = pool->LoadTTFFont(
+                request.name.c_str(),
+                params.path.c_str(),
+                params.font_width,
+                params.font_height
+            );
+            
+            MARK_SUCCESS_IF_REGISTERED()
         }
-        catch (const std::exception& e)
+        else
         {
             result.success = false;
-            result.error_message = e.what();
+            result.error_message = "Modern API TrueType font loading not implemented in async loader";
         }
+        
+        END_COMPLETE_FUNCTION()
     }
     
     void AsyncResourceLoader::CompleteFX(std::shared_ptr<ResourceLoadingTask> task, size_t index, ResourceLoadResult& result)
     {
-        if (!result.success)
-        {
-            return;
-        }
+        BEGIN_COMPLETE_FUNCTION()
         
-        const auto& request = task->GetRequests()[index];
         const auto& params = std::get<FXLoadParams>(request.params);
         
-        try
+        if (task->UseResourcePool())
         {
-            if (task->UseResourcePool())
-            {
-                auto pool = request.target_pool ? request.target_pool : task->GetTargetPool();
-                if (!pool)
-                {
-                    result.success = false;
-                    result.error_message = "No active resource pool";
-                    return;
-                }
-                
-                result.success = pool->LoadFX(
-                    request.name.c_str(),
-                    params.path.c_str()
-                );
-                
-                if (result.success)
-                {
-                    result.registered_to_pool = true;
-                }
-                else
-                {
-                    result.error_message = "Failed to load FX";
-                }
-            }
-            else
-            {
-                result.success = false;
-                result.error_message = "Modern API FX loading not implemented in async loader";
-            }
+            GET_POOL_OR_FAIL(pool)
+            
+            result.success = pool->LoadFX(
+                request.name.c_str(),
+                params.path.c_str()
+            );
+            
+            MARK_SUCCESS_IF_REGISTERED()
         }
-        catch (const std::exception& e)
+        else
         {
             result.success = false;
-            result.error_message = e.what();
+            result.error_message = "Modern API FX loading not implemented in async loader";
         }
+        
+        END_COMPLETE_FUNCTION()
     }
     
     void AsyncResourceLoader::CompleteModel(std::shared_ptr<ResourceLoadingTask> task, size_t index, ResourceLoadResult& result)
     {
-        if (!result.success)
-        {
-            return;
-        }
+        BEGIN_COMPLETE_FUNCTION()
         
-        const auto& request = task->GetRequests()[index];
         const auto& params = std::get<ModelLoadParams>(request.params);
         
-        try
+        if (task->UseResourcePool())
         {
-            if (task->UseResourcePool())
-            {
-                auto pool = request.target_pool ? request.target_pool : task->GetTargetPool();
-                if (!pool)
-                {
-                    result.success = false;
-                    result.error_message = "No active resource pool";
-                    return;
-                }
-                
-                result.success = pool->LoadModel(
-                    request.name.c_str(),
-                    params.path.c_str()
-                );
-                
-                if (result.success)
-                {
-                    result.registered_to_pool = true;
-                }
-                else
-                {
-                    result.error_message = "Failed to load model";
-                }
-            }
-            else
-            {
-                result.success = false;
-                result.error_message = "Modern API model loading not implemented in async loader";
-            }
+            GET_POOL_OR_FAIL(pool)
+            
+            result.success = pool->LoadModel(
+                request.name.c_str(),
+                params.path.c_str()
+            );
+            
+            MARK_SUCCESS_IF_REGISTERED()
         }
-        catch (const std::exception& e)
+        else
         {
             result.success = false;
-            result.error_message = e.what();
+            result.error_message = "Modern API model loading not implemented in async loader";
         }
+        
+        END_COMPLETE_FUNCTION()
     }
     
     void AsyncResourceLoader::CompleteParticle(std::shared_ptr<ResourceLoadingTask> task, size_t index, ResourceLoadResult& result)
     {
-        if (!result.success)
-        {
-            return;
-        }
+        BEGIN_COMPLETE_FUNCTION()
         
-        const auto& request = task->GetRequests()[index];
         const auto& params = std::get<ParticleLoadParams>(request.params);
         
-        try
+        if (task->UseResourcePool())
         {
-            if (task->UseResourcePool())
-            {
-                auto pool = request.target_pool ? request.target_pool : task->GetTargetPool();
-                if (!pool)
-                {
-                    result.success = false;
-                    result.error_message = "No active resource pool";
-                    return;
-                }
-                
-                result.success = pool->LoadParticle(
-                    request.name.c_str(),
-                    params.path.c_str(),
-                    params.particle_img_name.c_str(),
-                    params.anchor_x,
-                    params.anchor_y,
-                    params.is_rect
-                );
-                
-                if (result.success)
-                {
-                    result.registered_to_pool = true;
-                }
-                else
-                {
-                    result.error_message = "Failed to load particle";
-                }
-            }
-            else
-            {
-                result.success = false;
-                result.error_message = "Modern API particle loading not implemented in async loader";
-            }
+            GET_POOL_OR_FAIL(pool)
+            
+            result.success = pool->LoadParticle(
+                request.name.c_str(),
+                params.path.c_str(),
+                params.particle_img_name.c_str(),
+                params.anchor_x,
+                params.anchor_y,
+                params.is_rect
+            );
+            
+            MARK_SUCCESS_IF_REGISTERED()
         }
-        catch (const std::exception& e)
+        else
         {
             result.success = false;
-            result.error_message = e.what();
+            result.error_message = "Modern API particle loading not implemented in async loader";
         }
+        
+        END_COMPLETE_FUNCTION()
     }
+    
+    // 清理宏定义
+    #undef BEGIN_COMPLETE_FUNCTION
+    #undef END_COMPLETE_FUNCTION
+    #undef GET_POOL_OR_FAIL
+    #undef MARK_SUCCESS_IF_REGISTERED
 }
