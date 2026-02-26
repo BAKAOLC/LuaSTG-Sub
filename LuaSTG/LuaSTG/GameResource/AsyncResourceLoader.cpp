@@ -969,9 +969,22 @@ namespace luastg
                 request.name.c_str(),
                 params.texture_name.c_str(),
                 params.x, params.y, params.w, params.h,
-                params.anchor_x, params.anchor_y,
+                params.a, params.b,  // 使用碰撞体参数 a 和 b
                 params.is_rect
             );
+            
+            // 如果指定了自定义 anchor，需要在创建后修改 center
+            if (result.success && (params.anchor_x.has_value() || params.anchor_y.has_value()))
+            {
+                auto sprite = pool->GetSprite(request.name);
+                if (sprite && sprite->GetSprite())
+                {
+                    // 使用指定的 anchor 值，如果未设置则使用默认值
+                    float center_x = params.anchor_x.has_value() ? static_cast<float>(params.anchor_x.value()) : static_cast<float>(params.w * 0.5);
+                    float center_y = params.anchor_y.has_value() ? static_cast<float>(params.anchor_y.value()) : static_cast<float>(params.h * 0.5);
+                    sprite->GetSprite()->setTextureCenter(core::Vector2F(center_x, center_y));
+                }
+            }
             
             MARK_SUCCESS_IF_REGISTERED()
         }
@@ -997,15 +1010,14 @@ namespace luastg
             p_sprite->setTextureRect(core::RectF(
                 static_cast<float>(params.x),
                 static_cast<float>(params.y),
-                static_cast<float>(params.w),
-                static_cast<float>(params.h)
+                static_cast<float>(params.x + params.w),
+                static_cast<float>(params.y + params.h)
             ));
             
-            // 设置锚点
-            p_sprite->setTextureCenter(core::Vector2F(
-                static_cast<float>(params.anchor_x),
-                static_cast<float>(params.anchor_y)
-            ));
+            // 设置锚点（纹理中心点），如果未设置则使用默认值 (w*0.5, h*0.5)
+            float center_x = params.anchor_x.has_value() ? static_cast<float>(params.anchor_x.value()) : static_cast<float>(params.w * 0.5);
+            float center_y = params.anchor_y.has_value() ? static_cast<float>(params.anchor_y.value()) : static_cast<float>(params.h * 0.5);
+            p_sprite->setTextureCenter(core::Vector2F(center_x, center_y));
             
             result.sprite = p_sprite;
             result.success = true;
@@ -1032,7 +1044,7 @@ namespace luastg
                     params.texture_name.c_str(),
                     params.x, params.y, params.w, params.h,
                     params.n, params.m, params.interval,
-                    params.anchor_x, params.anchor_y,
+                    params.a, params.b,
                     params.is_rect
                 );
             }
@@ -1056,7 +1068,7 @@ namespace luastg
                     request.name.c_str(),
                     sprites,
                     params.interval,
-                    params.anchor_x, params.anchor_y,
+                    params.a, params.b,
                     params.is_rect
                 );
             }
@@ -1335,8 +1347,8 @@ namespace luastg
                 request.name.c_str(),
                 params.path.c_str(),
                 params.particle_img_name.c_str(),
-                params.anchor_x,
-                params.anchor_y,
+                params.a,
+                params.b,
                 params.is_rect
             );
             

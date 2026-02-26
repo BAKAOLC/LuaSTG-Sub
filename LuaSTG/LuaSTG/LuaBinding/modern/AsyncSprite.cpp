@@ -245,6 +245,14 @@ namespace luastg::binding
                 lua_getfield(L, 2, "anchor_y");
                 if (lua_isnumber(L, -1)) default_params.anchor_y = lua_tonumber(L, -1);
                 lua_pop(L, 1);
+                
+                lua_getfield(L, 2, "a");
+                if (lua_isnumber(L, -1)) default_params.a = lua_tonumber(L, -1);
+                lua_pop(L, 1);
+                
+                lua_getfield(L, 2, "b");
+                if (lua_isnumber(L, -1)) default_params.b = lua_tonumber(L, -1);
+                lua_pop(L, 1);
             }
             
             for (size_t i = 1; i <= count; ++i)
@@ -307,6 +315,15 @@ namespace luastg::binding
                     
                     lua_getfield(L, -1, "anchor_y");
                     if (lua_isnumber(L, -1)) params.anchor_y = lua_tonumber(L, -1);
+                    lua_pop(L, 1);
+                    
+                    // a, b (碰撞体半径，可选，覆盖默认值)
+                    lua_getfield(L, -1, "a");
+                    if (lua_isnumber(L, -1)) params.a = lua_tonumber(L, -1);
+                    lua_pop(L, 1);
+                    
+                    lua_getfield(L, -1, "b");
+                    if (lua_isnumber(L, -1)) params.b = lua_tonumber(L, -1);
                     lua_pop(L, 1);
                     
                     // rect (可选，覆盖默认值)

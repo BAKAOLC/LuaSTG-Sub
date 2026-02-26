@@ -8,6 +8,7 @@
 #include <atomic>
 #include <functional>
 #include <variant>
+#include <optional>
 #include "core/SmartReference.hpp"
 #include "core/Graphics/Sprite.hpp"
 #include "GameResource/ResourceBase.hpp"
@@ -42,7 +43,9 @@ namespace luastg
         std::string texture_name;  // 用于资源池 API
         core::ITexture2D* texture_object = nullptr;  // 用于现代 API
         double x = 0.0, y = 0.0, w = 0.0, h = 0.0;
-        double anchor_x = 0.0, anchor_y = 0.0;
+        std::optional<double> anchor_x;  // 纹理中心点（用于旋转和定位），未设置时使用默认值 (w*0.5, h*0.5)
+        std::optional<double> anchor_y;
+        double a = 0.0, b = 0.0;  // 碰撞体半径大小
         bool is_rect = false;
     };
     
@@ -53,7 +56,9 @@ namespace luastg
         double x = 0.0, y = 0.0, w = 0.0, h = 0.0;
         int n = 1, m = 1;  // 行列数
         int interval = 1;  // 帧间隔
-        double anchor_x = 0.0, anchor_y = 0.0;
+        std::optional<double> anchor_x;  // 纹理中心点（用于旋转和定位），未设置时使用默认值 (w*0.5, h*0.5)
+        std::optional<double> anchor_y;
+        double a = 0.0, b = 0.0;  // 碰撞体半径大小
         bool is_rect = false;
         std::vector<std::string> sprite_names;  // 用于从精灵列表创建动画
     };
@@ -106,8 +111,8 @@ namespace luastg
     {
         std::string path;
         std::string particle_img_name;
-        double anchor_x = 0.0;
-        double anchor_y = 0.0;
+        double a = 0.0;  // 碰撞体半径 X
+        double b = 0.0;  // 碰撞体半径 Y
         bool is_rect = false;
     };
     
