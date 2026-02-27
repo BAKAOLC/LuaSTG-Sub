@@ -90,7 +90,7 @@ namespace luastg::binding
             auto results = self->task->GetResults();
             
             // 创建精灵对象数组
-            lua_createtable(L, static_cast<int>(results.size()), 0);
+            auto array_idx = S.create_array(results.size());
             
             for (size_t i = 0; i < results.size(); ++i)
             {
@@ -107,10 +107,10 @@ namespace luastg::binding
                 }
                 else
                 {
-                    lua_pushnil(L);
+                    S.push_value(std::nullopt);
                 }
                 
-                lua_rawseti(L, -2, static_cast<int>(i + 1));
+                S.set_array_value(array_idx, lua::stack_index_t(static_cast<int32_t>(i + 1)), S.index_of_top());
             }
             
             // 缓存这个数组到 registry，避免重复创建
@@ -202,73 +202,68 @@ namespace luastg::binding
         {
             lua::stack_t S(L);
             
-            if (!lua_istable(L, 1))
+            if (!S.is_table(1))
             {
                 return luaL_error(L, "Expected table of sprite definitions");
             }
             
             std::vector<ResourceLoadRequest> requests;
-            size_t count = lua_objlen(L, 1);
+            size_t count = S.get_array_size(1);
             requests.reserve(count);
             
             // 读取默认参数（如果有）
             SpriteLoadParams default_params;
             core::ITexture2D* default_texture_obj = nullptr;
             
-            if (lua_gettop(L) >= 2 && lua_istable(L, 2))
+            if (S.index_of_top() >= 2 && S.is_table(2))
             {
+                lua::stack_index_t defaults_idx(2);
+                
                 // texture (默认纹理，可以是字符串或 Texture2D 对象)
-                lua_getfield(L, 2, "texture");
-                if (lua_isstring(L, -1))
+                S.push_map_value(defaults_idx, "texture");
+                if (S.is_string(-1))
                 {
-                    default_params.texture_name = lua_tostring(L, -1);
+                    default_params.texture_name = S.get_value<std::string_view>(-1);
                 }
                 else if (Texture2D::is(L, -1))
                 {
                     auto* tex = Texture2D::as(L, -1);
                     default_texture_obj = tex->data;
                 }
-                lua_pop(L, 1);
+                S.pop_value(1);
                 
                 // 读取其他默认参数
-                lua_getfield(L, 2, "rect");
-                if (lua_isboolean(L, -1))
+                if (S.has_map_value(defaults_idx, "rect"))
                 {
-                    default_params.is_rect = lua_toboolean(L, -1) != 0;
+                    default_params.is_rect = S.get_map_value<bool>(defaults_idx, "rect", default_params.is_rect);
                 }
-                lua_pop(L, 1);
-                
-                lua_getfield(L, 2, "anchor_x");
-                if (lua_isnumber(L, -1)) default_params.anchor_x = lua_tonumber(L, -1);
-                lua_pop(L, 1);
-                
-                lua_getfield(L, 2, "anchor_y");
-                if (lua_isnumber(L, -1)) default_params.anchor_y = lua_tonumber(L, -1);
-                lua_pop(L, 1);
-                
-                lua_getfield(L, 2, "a");
-                if (lua_isnumber(L, -1)) default_params.a = lua_tonumber(L, -1);
-                lua_pop(L, 1);
-                
-                lua_getfield(L, 2, "b");
-                if (lua_isnumber(L, -1)) default_params.b = lua_tonumber(L, -1);
-                lua_pop(L, 1);
+                if (S.has_map_value(defaults_idx, "anchor_x"))
+                {
+                    default_params.anchor_x = S.get_map_value<double>(defaults_idx, "anchor_x");
+                }
+                if (S.has_map_value(defaults_idx, "anchor_y"))
+                {
+                    default_params.anchor_y = S.get_map_value<double>(defaults_idx, "anchor_y");
+                }
+                default_params.a = S.get_map_value<double>(defaults_idx, "a", default_params.a);
+                default_params.b = S.get_map_value<double>(defaults_idx, "b", default_params.b);
             }
             
             for (size_t i = 1; i <= count; ++i)
             {
-                lua_rawgeti(L, 1, static_cast<int>(i));
+                S.push_array_value_zero_base(1, i - 1);
                 
-                if (lua_istable(L, -1))
+                if (S.is_table(-1))
                 {
+                    lua::stack_index_t item_idx = S.index_of_top();
                     SpriteLoadParams params = default_params;
                     core::ITexture2D* texture_obj = default_texture_obj;
                     
                     // texture (可选，如果有默认值)
-                    lua_getfield(L, -1, "texture");
-                    if (lua_isstring(L, -1))
+                    S.push_map_value(item_idx, "texture");
+                    if (S.is_string(-1))
                     {
-                        params.texture_name = lua_tostring(L, -1);
+                        params.texture_name = S.get_value<std::string_view>(-1);
                         texture_obj = nullptr;
                     }
                     else if (Texture2D::is(L, -1))
@@ -277,62 +272,45 @@ namespace luastg::binding
                         texture_obj = tex->data;
                         params.texture_name.clear();
                     }
-                    else if (!lua_isnil(L, -1))
+                    else if (!S.is_nil(-1))
                     {
-                        lua_pop(L, 2);
+                        S.pop_value(2);
                         continue; // 无效的纹理类型
                     }
-                    lua_pop(L, 1);
+                    S.pop_value(1);
                     
                     // 如果既没有字符串也没有对象，检查是否有默认值
                     if (params.texture_name.empty() && !texture_obj)
                     {
-                        lua_pop(L, 1);
+                        S.pop_value(1);
                         continue; // 跳过没有纹理的项
                     }
                     
                     // x, y, w, h (必需)
-                    lua_getfield(L, -1, "x");
-                    if (lua_isnumber(L, -1)) params.x = lua_tonumber(L, -1);
-                    lua_pop(L, 1);
-                    
-                    lua_getfield(L, -1, "y");
-                    if (lua_isnumber(L, -1)) params.y = lua_tonumber(L, -1);
-                    lua_pop(L, 1);
-                    
-                    lua_getfield(L, -1, "w");
-                    if (lua_isnumber(L, -1)) params.w = lua_tonumber(L, -1);
-                    lua_pop(L, 1);
-                    
-                    lua_getfield(L, -1, "h");
-                    if (lua_isnumber(L, -1)) params.h = lua_tonumber(L, -1);
-                    lua_pop(L, 1);
+                    params.x = S.get_map_value<double>(item_idx, "x", params.x);
+                    params.y = S.get_map_value<double>(item_idx, "y", params.y);
+                    params.w = S.get_map_value<double>(item_idx, "w", params.w);
+                    params.h = S.get_map_value<double>(item_idx, "h", params.h);
                     
                     // anchor_x, anchor_y (可选，覆盖默认值)
-                    lua_getfield(L, -1, "anchor_x");
-                    if (lua_isnumber(L, -1)) params.anchor_x = lua_tonumber(L, -1);
-                    lua_pop(L, 1);
-                    
-                    lua_getfield(L, -1, "anchor_y");
-                    if (lua_isnumber(L, -1)) params.anchor_y = lua_tonumber(L, -1);
-                    lua_pop(L, 1);
+                    if (S.has_map_value(item_idx, "anchor_x"))
+                    {
+                        params.anchor_x = S.get_map_value<double>(item_idx, "anchor_x");
+                    }
+                    if (S.has_map_value(item_idx, "anchor_y"))
+                    {
+                        params.anchor_y = S.get_map_value<double>(item_idx, "anchor_y");
+                    }
                     
                     // a, b (碰撞体半径，可选，覆盖默认值)
-                    lua_getfield(L, -1, "a");
-                    if (lua_isnumber(L, -1)) params.a = lua_tonumber(L, -1);
-                    lua_pop(L, 1);
-                    
-                    lua_getfield(L, -1, "b");
-                    if (lua_isnumber(L, -1)) params.b = lua_tonumber(L, -1);
-                    lua_pop(L, 1);
+                    params.a = S.get_map_value<double>(item_idx, "a", params.a);
+                    params.b = S.get_map_value<double>(item_idx, "b", params.b);
                     
                     // rect (可选，覆盖默认值)
-                    lua_getfield(L, -1, "rect");
-                    if (lua_isboolean(L, -1))
+                    if (S.has_map_value(item_idx, "rect"))
                     {
-                        params.is_rect = lua_toboolean(L, -1) != 0;
+                        params.is_rect = S.get_map_value<bool>(item_idx, "rect", params.is_rect);
                     }
-                    lua_pop(L, 1);
                     
                     // 如果使用 Texture2D 对象，存储指针供主线程使用
                     if (texture_obj)
@@ -349,7 +327,7 @@ namespace luastg::binding
                     requests.push_back(std::move(request));
                 }
                 
-                lua_pop(L, 1);
+                S.pop_value(1);
             }
             
             if (requests.empty())
@@ -384,19 +362,19 @@ namespace luastg::binding
             
             // 获取或创建 lstg.Sprite 表
             lua_getglobal(L, "lstg");
-            if (!lua_istable(L, -1))
+            if (!S.is_table(-1))
             {
-                lua_pop(L, 1);
-                lua_newtable(L);
+                S.pop_value(1);
+                S.create_map();
                 lua_setglobal(L, "lstg");
                 lua_getglobal(L, "lstg");
             }
             
             lua_getfield(L, -1, "Sprite");
-            if (!lua_istable(L, -1))
+            if (!S.is_table(-1))
             {
-                lua_pop(L, 1);
-                lua_newtable(L);
+                S.pop_value(1);
+                S.create_map();
                 lua_setfield(L, -2, "Sprite");
                 lua_getfield(L, -1, "Sprite");
             }
@@ -405,7 +383,7 @@ namespace luastg::binding
             lua_pushcfunction(L, &loadAsync);
             lua_setfield(L, -2, "loadAsync");
             
-            lua_pop(L, 2); // pop Sprite and lstg
+            S.pop_value(2); // pop Sprite and lstg
         }
     };
 }

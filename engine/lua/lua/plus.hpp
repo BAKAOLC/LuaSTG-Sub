@@ -324,6 +324,24 @@ namespace lua {
 		inline T get_map_value(stack_index_t index, std::string_view key) { return typename T::__invalid_type__{}; }
 
 		template<>
+		inline bool get_map_value(stack_index_t index, std::string_view key) {
+			push_value(key);
+			lua_gettable(L, index.value);
+			auto const s = get_value<bool>(-1);
+			pop_value();
+			return s;
+		}
+
+		template<>
+		inline int32_t get_map_value(stack_index_t index, std::string_view key) {
+			push_value(key);
+			lua_gettable(L, index.value);
+			auto const s = get_value<int32_t>(-1);
+			pop_value();
+			return s;
+		}
+
+		template<>
 		inline uint32_t get_map_value(stack_index_t index, std::string_view key) {
 			push_value(key);
 			lua_gettable(L, index.value);
@@ -337,6 +355,15 @@ namespace lua {
 			push_value(key);
 			lua_gettable(L, index.value);
 			auto const s = get_value<double>(-1);
+			pop_value();
+			return s;
+		}
+
+		template<>
+		inline std::string get_map_value(stack_index_t index, std::string_view key) {
+			push_value(key);
+			lua_gettable(L, index.value);
+			auto const s = get_value<std::string>(-1);
 			pop_value();
 			return s;
 		}

@@ -89,7 +89,7 @@ namespace luastg::binding
             auto results = self->task->GetResults();
             
             // 创建纹理对象数组
-            lua_createtable(L, static_cast<int>(results.size()), 0);
+            auto array_idx = S.create_array(results.size());
             
             for (size_t i = 0; i < results.size(); ++i)
             {
@@ -106,10 +106,10 @@ namespace luastg::binding
                 }
                 else
                 {
-                    lua_pushnil(L);
+                    S.push_value(std::nullopt);
                 }
                 
-                lua_rawseti(L, -2, static_cast<int>(i + 1));
+                S.set_array_value(array_idx, lua::stack_index_t(static_cast<int32_t>(i + 1)), S.index_of_top());
             }
             
             // 缓存这个数组到 registry，避免重复创建
@@ -200,40 +200,40 @@ namespace luastg::binding
         {
             lua::stack_t S(L);
             
-            if (!lua_istable(L, 1))
+            if (!S.is_table(1))
             {
                 return luaL_error(L, "Expected table of file paths");
             }
             
             std::vector<ResourceLoadRequest> requests;
-            size_t count = lua_objlen(L, 1);
+            size_t count = S.get_array_size(1);
             requests.reserve(count);
             
             bool mipmaps = true;
-            if (lua_gettop(L) >= 2 && lua_isboolean(L, 2))
+            if (S.index_of_top() >= 2 && S.is_boolean(2))
             {
-                mipmaps = lua_toboolean(L, 2) != 0;
+                mipmaps = S.get_value<bool>(2);
             }
             
             for (size_t i = 1; i <= count; ++i)
             {
-                lua_rawgeti(L, 1, static_cast<int>(i));
+                S.push_array_value_zero_base(1, i - 1);
                 
-                if (lua_isstring(L, -1))
+                if (S.is_string(-1))
                 {
                     ResourceLoadRequest request;
                     request.type = ResourceType::Texture;
                     request.name.clear(); // 现代 API 不使用名称
                     
                     TextureLoadParams params;
-                    params.path = lua_tostring(L, -1);
+                    params.path = S.get_value<std::string_view>(-1);
                     params.mipmaps = mipmaps;
                     request.params = params;
                     
                     requests.push_back(std::move(request));
                 }
                 
-                lua_pop(L, 1);
+                S.pop_value(1);
             }
             
             if (requests.empty())
@@ -268,19 +268,19 @@ namespace luastg::binding
             
             // 获取或创建 lstg.Texture2D 表
             lua_getglobal(L, "lstg");
-            if (!lua_istable(L, -1))
+            if (!S.is_table(-1))
             {
-                lua_pop(L, 1);
-                lua_newtable(L);
+                S.pop_value(1);
+                S.create_map();
                 lua_setglobal(L, "lstg");
                 lua_getglobal(L, "lstg");
             }
             
             lua_getfield(L, -1, "Texture2D");
-            if (!lua_istable(L, -1))
+            if (!S.is_table(-1))
             {
-                lua_pop(L, 1);
-                lua_newtable(L);
+                S.pop_value(1);
+                S.create_map();
                 lua_setfield(L, -2, "Texture2D");
                 lua_getfield(L, -1, "Texture2D");
             }
@@ -289,7 +289,7 @@ namespace luastg::binding
             lua_pushcfunction(L, &loadAsync);
             lua_setfield(L, -2, "loadAsync");
             
-            lua_pop(L, 2); // pop Texture2D and lstg
+            S.pop_value(2); // pop Texture2D and lstg
         }
     };
 }
