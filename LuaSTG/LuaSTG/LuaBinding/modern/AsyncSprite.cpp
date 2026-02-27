@@ -110,7 +110,7 @@ namespace luastg::binding
                     S.push_value(std::nullopt);
                 }
                 
-                S.set_array_value(array_idx, lua::stack_index_t(static_cast<int32_t>(i + 1)), S.index_of_top());
+                S.set_array_value(array_idx, i + 1, S.index_of_top());
             }
             
             // 缓存这个数组到 registry，避免重复创建
