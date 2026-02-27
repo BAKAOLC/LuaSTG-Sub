@@ -5,76 +5,27 @@
 
 namespace luastg::binding
 {
-    // 内联辅助函数：读取 Lua 表字段
+    // 内联辅助函数：读取通用精灵参数
     namespace detail
     {
-        inline std::optional<std::string> ReadStringField(lua_State* L, int table_index, const char* field_name)
-        {
-            lua_getfield(L, table_index, field_name);
-            std::optional<std::string> result;
-            if (lua_isstring(L, -1))
-            {
-                result = lua_tostring(L, -1);
-            }
-            lua_pop(L, 1);
-            return result;
-        }
-        
-        inline std::optional<double> ReadNumberField(lua_State* L, int table_index, const char* field_name)
-        {
-            lua_getfield(L, table_index, field_name);
-            std::optional<double> result;
-            if (lua_isnumber(L, -1))
-            {
-                result = lua_tonumber(L, -1);
-            }
-            lua_pop(L, 1);
-            return result;
-        }
-        
-        inline std::optional<int> ReadIntField(lua_State* L, int table_index, const char* field_name)
-        {
-            lua_getfield(L, table_index, field_name);
-            std::optional<int> result;
-            if (lua_isnumber(L, -1))
-            {
-                result = static_cast<int>(lua_tonumber(L, -1));
-            }
-            lua_pop(L, 1);
-            return result;
-        }
-        
-        inline std::optional<bool> ReadBoolField(lua_State* L, int table_index, const char* field_name)
-        {
-            lua_getfield(L, table_index, field_name);
-            std::optional<bool> result;
-            if (lua_isboolean(L, -1))
-            {
-                result = lua_toboolean(L, -1) != 0;
-            }
-            else if (lua_isnumber(L, -1))
-            {
-                result = lua_tonumber(L, -1) != 0;
-            }
-            lua_pop(L, 1);
-            return result;
-        }
-        
         // 读取通用精灵参数（Sprite、Animation、Particle 共享）
         inline void ReadCommonSpriteParams(lua_State* L, int table_index,
                                           double& x, double& y, double& w, double& h,
                                           std::optional<double>& anchor_x, std::optional<double>& anchor_y, 
                                           double& a, double& b, bool& is_rect)
         {
-            if (auto val = ReadNumberField(L, table_index, "x")) x = *val;
-            if (auto val = ReadNumberField(L, table_index, "y")) y = *val;
-            if (auto val = ReadNumberField(L, table_index, "w")) w = *val;
-            if (auto val = ReadNumberField(L, table_index, "h")) h = *val;
-            if (auto val = ReadNumberField(L, table_index, "anchor_x")) anchor_x = *val;
-            if (auto val = ReadNumberField(L, table_index, "anchor_y")) anchor_y = *val;
-            if (auto val = ReadNumberField(L, table_index, "a")) a = *val;
-            if (auto val = ReadNumberField(L, table_index, "b")) b = *val;
-            if (auto val = ReadBoolField(L, table_index, "rect")) is_rect = *val;
+            lua::stack_t stack(L);
+            lua::stack_index_t table_idx(table_index);
+            
+            if (stack.has_map_value(table_idx, "x")) x = stack.get_map_value<double>(table_idx, "x");
+            if (stack.has_map_value(table_idx, "y")) y = stack.get_map_value<double>(table_idx, "y");
+            if (stack.has_map_value(table_idx, "w")) w = stack.get_map_value<double>(table_idx, "w");
+            if (stack.has_map_value(table_idx, "h")) h = stack.get_map_value<double>(table_idx, "h");
+            if (stack.has_map_value(table_idx, "anchor_x")) anchor_x = stack.get_map_value<double>(table_idx, "anchor_x");
+            if (stack.has_map_value(table_idx, "anchor_y")) anchor_y = stack.get_map_value<double>(table_idx, "anchor_y");
+            if (stack.has_map_value(table_idx, "a")) a = stack.get_map_value<double>(table_idx, "a");
+            if (stack.has_map_value(table_idx, "b")) b = stack.get_map_value<double>(table_idx, "b");
+            if (stack.has_map_value(table_idx, "rect")) is_rect = stack.get_map_value<bool>(table_idx, "rect");
         }
     }
     
@@ -96,7 +47,7 @@ namespace luastg::binding
             lua::stack_t S(L);
             auto* self = cast(L, 1);
             CHECK_TASK_VALID()
-            S.push_value(static_cast<lua_Integer>(self->task->GetId()));
+            S.push_value(self->task->GetId());
             return 1;
         }
         
@@ -105,8 +56,8 @@ namespace luastg::binding
             lua::stack_t S(L);
             auto* self = cast(L, 1);
             CHECK_TASK_VALID()
-            S.push_value(static_cast<lua_Integer>(self->task->GetCompletedCount()));
-            S.push_value(static_cast<lua_Integer>(self->task->GetTotalCount()));
+            S.push_value(self->task->GetCompletedCount());
+            S.push_value(self->task->GetTotalCount());
             return 2;
         }
         
@@ -181,47 +132,39 @@ namespace luastg::binding
         
         static int api_getResults(lua_State* L)
         {
-            lua::stack_t S(L);
+            lua::stack_t stack(L);
             auto* self = cast(L, 1);
             CHECK_TASK_VALID()
             
             auto results = self->task->GetResults();
             
             // 创建结果表
-            lua_createtable(L, static_cast<int>(results.size()), 0);
+            auto results_array = stack.create_array(results.size());
             
             for (size_t i = 0; i < results.size(); ++i)
             {
                 const auto& result = results[i];
                 
                 // 创建单个结果表
-                lua_createtable(L, 0, 4);
+                auto result_map = stack.create_map(4);
                 
                 // name
-                lua_pushstring(L, "name");
-                lua_pushstring(L, result.name.c_str());
-                lua_settable(L, -3);
+                stack.set_map_value(result_map, "name", result.name);
                 
                 // success
-                lua_pushstring(L, "success");
-                lua_pushboolean(L, result.success);
-                lua_settable(L, -3);
+                stack.set_map_value(result_map, "success", result.success);
                 
                 // error (如果有)
                 if (!result.success && !result.error_message.empty())
                 {
-                    lua_pushstring(L, "error");
-                    lua_pushstring(L, result.error_message.c_str());
-                    lua_settable(L, -3);
+                    stack.set_map_value(result_map, "error", result.error_message);
                 }
                 
                 // type
-                lua_pushstring(L, "type");
-                lua_pushinteger(L, static_cast<lua_Integer>(result.type));
-                lua_settable(L, -3);
+                stack.set_map_value(result_map, "type", result.type);
                 
                 // 设置到结果数组
-                lua_rawseti(L, -2, static_cast<int>(i + 1));
+                stack.set_array_value(results_array, lua::stack_index_t(i + 1), result_map);
             }
             
             return 1;
@@ -307,20 +250,22 @@ namespace luastg::binding
         // 从 Lua 表中读取参数到 request
         static void ReadRequestParams(lua_State* L, int table_index, ResourceLoadRequest& request)
         {
-            using namespace detail;
+            lua::stack_t stack(L);
+            lua::stack_index_t table_idx(table_index);
             
-            if (auto name = ReadStringField(L, table_index, "name"))
+            if (stack.has_map_value(table_idx, "name"))
             {
-                request.name = *name;
+                request.name = stack.get_map_value<std::string>(table_idx, "name");
             }
             
-            if (auto pool = ReadStringField(L, table_index, "pool"))
+            if (stack.has_map_value(table_idx, "pool"))
             {
-                if (pool->compare("global") == 0)
+                auto pool = stack.get_map_value<std::string>(table_idx, "pool");
+                if (pool == "global")
                 {
                     request.target_pool = LRES.GetResourcePool(ResourcePoolType::Global);
                 }
-                else if (pool->compare("stage") == 0)
+                else if (pool == "stage")
                 {
                     request.target_pool = LRES.GetResourcePool(ResourcePoolType::Stage);
                 }
@@ -336,10 +281,10 @@ namespace luastg::binding
                     params = std::get<TextureLoadParams>(request.params);
                 }
                 
-                if (auto path = ReadStringField(L, table_index, "path")) params.path = *path;
-                if (auto mipmaps = ReadBoolField(L, table_index, "mipmaps")) params.mipmaps = *mipmaps;
-                if (auto width = ReadIntField(L, table_index, "width")) params.width = *width;
-                if (auto height = ReadIntField(L, table_index, "height")) params.height = *height;
+                if (stack.has_map_value(table_idx, "path")) params.path = stack.get_map_value<std::string>(table_idx, "path");
+                if (stack.has_map_value(table_idx, "mipmaps")) params.mipmaps = stack.get_map_value<bool>(table_idx, "mipmaps");
+                if (stack.has_map_value(table_idx, "width")) params.width = stack.get_map_value<int32_t>(table_idx, "width");
+                if (stack.has_map_value(table_idx, "height")) params.height = stack.get_map_value<int32_t>(table_idx, "height");
                 
                 request.params = params;
                 break;
@@ -353,8 +298,8 @@ namespace luastg::binding
                     params = std::get<SpriteLoadParams>(request.params);
                 }
                 
-                if (auto texture = ReadStringField(L, table_index, "texture")) params.texture_name = *texture;
-                ReadCommonSpriteParams(L, table_index, params.x, params.y, params.w, params.h,
+                if (stack.has_map_value(table_idx, "texture")) params.texture_name = stack.get_map_value<std::string>(table_idx, "texture");
+                detail::ReadCommonSpriteParams(L, table_index, params.x, params.y, params.w, params.h,
                                       params.anchor_x, params.anchor_y, params.a, params.b, params.is_rect);
                 
                 request.params = params;
@@ -369,28 +314,28 @@ namespace luastg::binding
                     params = std::get<AnimationLoadParams>(request.params);
                 }
                 
-                if (auto texture = ReadStringField(L, table_index, "texture")) params.texture_name = *texture;
-                ReadCommonSpriteParams(L, table_index, params.x, params.y, params.w, params.h,
+                if (stack.has_map_value(table_idx, "texture")) params.texture_name = stack.get_map_value<std::string>(table_idx, "texture");
+                detail::ReadCommonSpriteParams(L, table_index, params.x, params.y, params.w, params.h,
                                       params.anchor_x, params.anchor_y, params.a, params.b, params.is_rect);
-                if (auto n = ReadIntField(L, table_index, "n")) params.n = *n;
-                if (auto m = ReadIntField(L, table_index, "m")) params.m = *m;
-                if (auto interval = ReadIntField(L, table_index, "interval")) params.interval = *interval;
+                if (stack.has_map_value(table_idx, "n")) params.n = stack.get_map_value<int32_t>(table_idx, "n");
+                if (stack.has_map_value(table_idx, "m")) params.m = stack.get_map_value<int32_t>(table_idx, "m");
+                if (stack.has_map_value(table_idx, "interval")) params.interval = stack.get_map_value<int32_t>(table_idx, "interval");
                 
-                lua_getfield(L, table_index, "sprites");
-                if (lua_istable(L, -1))
+                stack.push_map_value(table_idx, "sprites");
+                if (stack.is_table(-1))
                 {
-                    size_t sprite_count = lua_objlen(L, -1);
+                    size_t sprite_count = stack.get_array_size(-1);
                     for (size_t j = 1; j <= sprite_count; ++j)
                     {
-                        lua_rawgeti(L, -1, static_cast<int>(j));
-                        if (lua_isstring(L, -1))
+                        stack.push_array_value_zero_base(-1, j - 1);
+                        if (stack.is_string(-1))
                         {
-                            params.sprite_names.push_back(lua_tostring(L, -1));
+                            params.sprite_names.push_back(stack.get_value<std::string>(-1));
                         }
-                        lua_pop(L, 1);
+                        stack.pop_value();
                     }
                 }
-                lua_pop(L, 1);
+                stack.pop_value();
                 
                 request.params = params;
                 break;
@@ -404,10 +349,10 @@ namespace luastg::binding
                     params = std::get<MusicLoadParams>(request.params);
                 }
                 
-                if (auto path = ReadStringField(L, table_index, "path")) params.path = *path;
-                if (auto loop_start = ReadNumberField(L, table_index, "loop_start")) params.loop_start = *loop_start;
-                if (auto loop_end = ReadNumberField(L, table_index, "loop_end")) params.loop_end = *loop_end;
-                if (auto once_decode = ReadBoolField(L, table_index, "once_decode")) params.once_decode = *once_decode;
+                if (stack.has_map_value(table_idx, "path")) params.path = stack.get_map_value<std::string>(table_idx, "path");
+                if (stack.has_map_value(table_idx, "loop_start")) params.loop_start = stack.get_map_value<double>(table_idx, "loop_start");
+                if (stack.has_map_value(table_idx, "loop_end")) params.loop_end = stack.get_map_value<double>(table_idx, "loop_end");
+                if (stack.has_map_value(table_idx, "once_decode")) params.once_decode = stack.get_map_value<bool>(table_idx, "once_decode");
                 
                 request.params = params;
                 break;
@@ -421,7 +366,7 @@ namespace luastg::binding
                     params = std::get<SoundEffectLoadParams>(request.params);
                 }
                 
-                if (auto path = ReadStringField(L, table_index, "path")) params.path = *path;
+                if (stack.has_map_value(table_idx, "path")) params.path = stack.get_map_value<std::string>(table_idx, "path");
                 
                 request.params = params;
                 break;
@@ -435,9 +380,9 @@ namespace luastg::binding
                     params = std::get<SpriteFontLoadParams>(request.params);
                 }
                 
-                if (auto path = ReadStringField(L, table_index, "path")) params.path = *path;
-                if (auto tex_path = ReadStringField(L, table_index, "tex_path")) params.font_tex_path = *tex_path;
-                if (auto mipmaps = ReadBoolField(L, table_index, "mipmaps")) params.mipmaps = *mipmaps;
+                if (stack.has_map_value(table_idx, "path")) params.path = stack.get_map_value<std::string>(table_idx, "path");
+                if (stack.has_map_value(table_idx, "tex_path")) params.font_tex_path = stack.get_map_value<std::string>(table_idx, "tex_path");
+                if (stack.has_map_value(table_idx, "mipmaps")) params.mipmaps = stack.get_map_value<bool>(table_idx, "mipmaps");
                 
                 request.params = params;
                 break;
@@ -451,9 +396,9 @@ namespace luastg::binding
                     params = std::get<TrueTypeFontLoadParams>(request.params);
                 }
                 
-                if (auto path = ReadStringField(L, table_index, "path")) params.path = *path;
-                if (auto width = ReadNumberField(L, table_index, "width")) params.font_width = static_cast<float>(*width);
-                if (auto height = ReadNumberField(L, table_index, "height")) params.font_height = static_cast<float>(*height);
+                if (stack.has_map_value(table_idx, "path")) params.path = stack.get_map_value<std::string>(table_idx, "path");
+                if (stack.has_map_value(table_idx, "width")) params.font_width = static_cast<float>(stack.get_map_value<double>(table_idx, "width"));
+                if (stack.has_map_value(table_idx, "height")) params.font_height = static_cast<float>(stack.get_map_value<double>(table_idx, "height"));
                 
                 request.params = params;
                 break;
@@ -467,7 +412,7 @@ namespace luastg::binding
                     params = std::get<FXLoadParams>(request.params);
                 }
                 
-                if (auto path = ReadStringField(L, table_index, "path")) params.path = *path;
+                if (stack.has_map_value(table_idx, "path")) params.path = stack.get_map_value<std::string>(table_idx, "path");
                 
                 request.params = params;
                 break;
@@ -481,7 +426,7 @@ namespace luastg::binding
                     params = std::get<ModelLoadParams>(request.params);
                 }
                 
-                if (auto path = ReadStringField(L, table_index, "path")) params.path = *path;
+                if (stack.has_map_value(table_idx, "path")) params.path = stack.get_map_value<std::string>(table_idx, "path");
                 
                 request.params = params;
                 break;
@@ -495,11 +440,11 @@ namespace luastg::binding
                     params = std::get<ParticleLoadParams>(request.params);
                 }
                 
-                if (auto path = ReadStringField(L, table_index, "path")) params.path = *path;
-                if (auto img_name = ReadStringField(L, table_index, "img_name")) params.particle_img_name = *img_name;
-                if (auto a = ReadNumberField(L, table_index, "a")) params.a = *a;
-                if (auto b = ReadNumberField(L, table_index, "b")) params.b = *b;
-                if (auto rect = ReadBoolField(L, table_index, "rect")) params.is_rect = *rect;
+                if (stack.has_map_value(table_idx, "path")) params.path = stack.get_map_value<std::string>(table_idx, "path");
+                if (stack.has_map_value(table_idx, "img_name")) params.particle_img_name = stack.get_map_value<std::string>(table_idx, "img_name");
+                if (stack.has_map_value(table_idx, "a")) params.a = stack.get_map_value<double>(table_idx, "a");
+                if (stack.has_map_value(table_idx, "b")) params.b = stack.get_map_value<double>(table_idx, "b");
+                if (stack.has_map_value(table_idx, "rect")) params.is_rect = stack.get_map_value<bool>(table_idx, "rect");
                 
                 request.params = params;
                 break;
@@ -517,10 +462,11 @@ namespace luastg::binding
         // 返回：请求列表和默认资源池
         static std::pair<std::vector<ResourceLoadRequest>, ResourcePool*> ParseLoadRequests(lua_State* L, int table_index, int defaults_index, ResourceType default_type)
         {
+            lua::stack_t stack(L);
             std::vector<ResourceLoadRequest> requests;
             ResourcePool* default_pool = nullptr;
             
-            if (!lua_istable(L, table_index))
+            if (!stack.is_table(table_index))
             {
                 luaL_error(L, "Expected table of load requests");
                 return {requests, default_pool};
@@ -529,22 +475,22 @@ namespace luastg::binding
             ResourceLoadRequest default_request;
             default_request.type = default_type;
             
-            if (defaults_index != 0 && lua_istable(L, defaults_index))
+            if (defaults_index != 0 && stack.is_table(defaults_index))
             {
                 ReadRequestParams(L, defaults_index, default_request);
                 default_pool = default_request.target_pool;
             }
             
-            size_t count = lua_objlen(L, table_index);
+            size_t count = stack.get_array_size(table_index);
             requests.reserve(count);
             
             for (size_t i = 1; i <= count; ++i)
             {
-                lua_rawgeti(L, table_index, static_cast<int>(i));
+                stack.push_array_value_zero_base(table_index, i - 1);
                 
-                if (!lua_istable(L, -1))
+                if (!stack.is_table(-1))
                 {
-                    lua_pop(L, 1);
+                    stack.pop_value();
                     continue;
                 }
                 
@@ -552,7 +498,7 @@ namespace luastg::binding
                 ReadRequestParams(L, -1, request);
                 
                 requests.push_back(std::move(request));
-                lua_pop(L, 1);
+                stack.pop_value();
             }
             
             return {requests, default_pool};
@@ -564,7 +510,8 @@ namespace luastg::binding
         {
             try
             {
-                int defaults_index = (lua_gettop(L) >= 2 && lua_istable(L, 2)) ? 2 : 0;
+                lua::stack_t stack(L);
+                int defaults_index = (stack.index_of_top() >= 2 && stack.is_table(2)) ? 2 : 0;
                 auto [requests, default_pool] = ParseLoadRequests(L, 1, defaults_index, Type);
                 
                 if (requests.empty())
@@ -645,8 +592,9 @@ namespace luastg::binding
         
         static int GetAsyncLoaderThreadCount(lua_State* L) noexcept
         {
+            lua::stack_t stack(L);
             auto* loader = LAPP.GetAsyncResourceLoader();
-            lua_pushinteger(L, loader ? static_cast<lua_Integer>(loader->GetThreadCount()) : 0);
+            stack.push_value(loader ? loader->GetThreadCount() : 0);
             return 1;
         }
         
@@ -668,8 +616,9 @@ namespace luastg::binding
         
         static int GetAsyncLoaderMaxItemsPerFrame(lua_State* L) noexcept
         {
+            lua::stack_t stack(L);
             auto* loader = LAPP.GetAsyncResourceLoader();
-            lua_pushinteger(L, loader ? static_cast<lua_Integer>(loader->GetMaxGPUItemsPerFrame()) : 0);
+            stack.push_value(loader ? loader->GetMaxGPUItemsPerFrame() : 0);
             return 1;
         }
         
