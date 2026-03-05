@@ -140,11 +140,10 @@ namespace luastg::binding
             
             // 创建结果表
             auto results_array = stack.create_array(results.size());
+            int index = 1;
             
-            for (size_t i = 0; i < results.size(); ++i)
+            for (auto const& result : results)
             {
-                const auto& result = results[i];
-                
                 // 创建单个结果表
                 auto result_map = stack.create_map(4);
                 
@@ -164,7 +163,9 @@ namespace luastg::binding
                 stack.set_map_value(result_map, "type", result.type);
                 
                 // 设置到结果数组
-                stack.set_array_value(results_array, lua::stack_index_t(i + 1), result_map);
+                stack.set_array_value(results_array, index, result_map);
+                stack.pop_value();
+                ++index;
             }
             
             return 1;

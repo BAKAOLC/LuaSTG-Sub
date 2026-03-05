@@ -90,11 +90,10 @@ namespace luastg::binding
             
             // 创建纹理对象数组
             auto array_idx = S.create_array(results.size());
+            int index = 1;
             
-            for (size_t i = 0; i < results.size(); ++i)
+            for (auto const& result : results)
             {
-                const auto& result = results[i];
-                
                 if (result.success && result.texture)
                 {
                     auto* tex_obj = Texture2D::create(L);
@@ -109,7 +108,10 @@ namespace luastg::binding
                     S.push_value(std::nullopt);
                 }
                 
-                S.set_array_value(array_idx, i + 1, S.index_of_top());
+                auto item_idx = S.index_of_top();
+                S.set_array_value(array_idx, index, item_idx);
+                S.pop_value();
+                ++index;
             }
             
             // 缓存这个数组到 registry，避免重复创建
